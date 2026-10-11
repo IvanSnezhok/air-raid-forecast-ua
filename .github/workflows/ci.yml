@@ -1,0 +1,30 @@
+# Tests on every push and pull request.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - name: Web app tests (synthetic data, offline)
+        run: pytest tests/app -q
+      - name: No-leakage tests (downloads the dataset)
+        run: pytest tests/test_leakage.py -q
+      - name: Threat-type no-leakage tests
+        run: pytest threat-type/tests -q
+      - name: Docker image builds
+        run: docker build -t airraid .

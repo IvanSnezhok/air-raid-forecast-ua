@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Прогноз повітряних тривог</title>
+<meta name="description" content="Поточні повітряні тривоги і ймовірнісний прогноз на 1-6 годин по областях України">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%23c2302e'/%3E%3Cpath d='M16 8v9' stroke='white' stroke-width='3.5' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='23' r='2.2' fill='white'/%3E%3C/svg%3E">
+<link rel="manifest" href="/static/manifest.webmanifest">
+<meta name="theme-color" content="#1c1b19">
+<link rel="apple-touch-icon" href="/static/icon.svg">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="dot" aria-hidden="true"></span>
+    <div>
+      <h1>Повітряні тривоги</h1>
+      <p class="tag">Що відбувається зараз і що очікувати в найближчі години</p>
+    </div>
+  </div>
+  <nav class="tabs" aria-label="Розділи">
+    <a href="#map" data-view="map">Мапа</a>
+    <a href="#metrics" data-view="metrics">Якість моделі</a>
+    <a href="#about" data-view="about">Як це працює</a>
+  </nav>
+</header>
+
+<div id="banner" class="banner" hidden></div>
+
+<main>
+  <section id="loading" class="loading" hidden>
+    <div class="spinner" aria-hidden="true"></div>
+    <h2>Модель готується</h2>
+    <p id="loading-msg">Запуск</p>
+    <p class="muted">Перше навчання займає кілька хвилин. Сторінка оновиться сама.</p>
+  </section>
+
+  <section id="view-map" class="view" hidden>
+    <p class="headline" id="headline"></p>
+    <div class="summary" id="summary"></div>
+
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Шар мапи" id="layer">
+        <button data-v="now" aria-pressed="true">Зараз</button>
+        <button data-v="forecast" aria-pressed="false">Прогноз</button>
+      </div>
+      <div class="seg" role="group" aria-label="Що прогнозуємо" id="target" hidden>
+        <button data-v="active" aria-pressed="true" title="Тривога триватиме хоча б частину цієї години">Тривога в годину</button>
+        <button data-v="onset" aria-pressed="false" title="Почнеться нова тривога протягом цього часу">Нова тривога</button>
+        <button data-v="type" aria-pressed="false" hidden title="Ймовірний тип загрози і рівень (жовтий/червоний)">Тип загрози</button>
+      </div>
+      <div class="seg" role="group" aria-label="Горизонт" id="horizon" hidden></div>
+      <span class="window" id="window"></span>
+      <label class="search"><span class="sr">Знайти область</span>
+        <input id="search" list="region-list" placeholder="Знайти область…" autocomplete="off">
+        <datalist id="region-list"></datalist></label>
+    </div>
+
+    <div class="grid">
+      <div class="card mapcard">
+        <div class="mapwrap">
+          <svg id="map" role="img" aria-label="Мапа областей України"></svg>
+          <div id="tip" class="tip" hidden></div>
+        </div>
+        <div class="legend" id="legend"></div>
+        <p class="attr" id="attr"></p>
+      </div>
+
+      <aside class="card detail" id="detail">
+        <p class="muted">Оберіть область на мапі або в списку, щоб побачити деталі.</p>
+      </aside>
+    </div>
+
+    <div class="card">
+      <div class="card-h">
+        <h2 id="rank-title">Усі області</h2>
+        <span class="muted small" id="rank-sub"></span>
+      </div>
+      <div class="tablewrap"><table class="rank" id="rank"></table></div>
+    </div>
+  </section>
+
+  <section id="view-metrics" class="view" hidden>
+    <div id="metrics"></div>
+  </section>
+
+  <section id="view-about" class="view prose" hidden>
+    <h2>Як це працює</h2>
+    <p>Сервіс показує, де повітряна тривога триває зараз, і оцінює ймовірність тривоги
+      в кожній області на 1, 2, 3 і 6 годин уперед. Це навчальний проєкт з аналізу часових рядів,
+      а не офіційне джерело.</p>
+    <p class="note"><strong>Важливо.</strong> Прогноз не замінює офіційних сигналів. Завжди реагуйте на сирену
+      і сповіщення застосунку «Повітряна тривога».</p>
+
+    <h3>Дві відповіді на два питання</h3>
+    <ul>
+      <li><strong>Тривога в годину N</strong>: чи буде область під тривогою хоча б частину N-ї години від моменту прогнозу.
+        На першу годину це майже завжди залежить від того, чи триває тривога зараз.</li>
+      <li><strong>Нова тривога протягом N год</strong>: чи почнеться нова тривога в найближчі N годин. Це складніше і
+        корисніше питання: «чи варто чекати тривоги найближчим часом?».</li>
+    </ul>
+
+    <h3>Дані</h3>
+    <ul>
+      <li>Історія: волонтерський датасет тривог по областях з початку повномасштабного вторгнення
+        (<a href="https://github.com/Vadimkin/ukrainian-air-raid-sirens-dataset" rel="noopener">Vadimkin/ukrainian-air-raid-sirens-dataset</a>),
+        оновлюється приблизно раз на добу.</li>
+      <li>Поточний стан: <a href="https://alerts.in.ua" rel="noopener">alerts.in.ua</a>, якщо сервер має токен API.
+        Тривога в будь-якому районі чи громаді позначає всю область, як і в історичних даних.
+        Без токена показано стан на кінець датасету.</li>
+    </ul>
+
+    <h3>Модель</h3>
+    <p>Для кожної пари «ціль × горизонт» навчається окремий градієнтний бустинг (LightGBM) на останніх місяцях історії.
+      Ознаки: чи триває тривога зараз і скільки триває, скільки минуло від останньої, кількість тривог за 6 год / добу / тиждень,
+      погодинна активність за останню добу, частка тривог у ту саму годину доби за 7 і 28 днів,
+      день тижня і година за Києвом, а також стан усіх інших областей зараз і годину тому. Модель сама вчиться,
+      які області «попереджають» інші.</p>
+    <p>Ознаки будуються лише з того, що було відомо в момент прогнозу. Це перевіряє автоматичний тест:
+      ознаки, пораховані на повних даних, мають збігатися з ознаками, порахованими на даних, обрізаних у момент прогнозу.</p>
+
+    <h3>Як ми перевіряємо якість</h3>
+    <p>Перед кожним навчанням останній тиждень відкладається: модель вчиться на даних до нього і прогнозує його погодинно,
+      як у реальному часі. Результат порівнюється з двома простими орієнтирами:</p>
+    <ul>
+      <li><strong>Кліматологія</strong>: частка днів за останні 28, коли в цю годину була тривога;</li>
+      <li><strong>Персистентність</strong>: «що зараз, те й буде».</li>
+    </ul>
+    <p>Метрики: Brier score (середня квадратична помилка ймовірності, менше краще), Brier skill score відносно кліматології
+      (більше нуля означає, що модель краща за орієнтир) і ROC AUC. Після перевірки модель перенавчається на всіх даних.</p>
+    <p>Крім того, сервіс зберігає кожен виданий прогноз і, коли прогнозована година минає, звіряє його з тим, що сталося насправді.
+      Результати видно на сторінці «Якість моделі» і в деталях кожної області («Минулі прогнози і що сталося»).
+      Модель щодоби перенавчається на свіжих даних, тож нові тривоги одразу потрапляють у навчання.</p>
+
+    <h3>API</h3>
+    <p>Усі дані сторінки доступні як JSON: <a href="/docs">/docs</a> (інтерактивна документація),
+      <code>/api/state</code>, <code>/api/forecast</code>, <code>/api/regions/{id}</code>, <code>/api/metrics</code>.</p>
+    <p class="muted small">Код: <a href="https://github.com/IvanSnezhok/air-raid-forecast-ua" rel="noopener">github.com/IvanSnezhok/air-raid-forecast-ua</a></p>
+  </section>
+</main>
+
+<footer class="foot">
+  <span id="foot-status"></span>
+  <span>Не є офіційним джерелом. Реагуйте на офіційні сигнали тривоги.</span>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
