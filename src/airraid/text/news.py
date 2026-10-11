@@ -19,6 +19,7 @@ import html
 import json
 import re
 import time
+import urllib.error
 import urllib.parse
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
@@ -37,7 +38,10 @@ RSS = {
     "rbc": "https://www.rbc.ua/static/rss/all.ukr.rss.xml",
 }
 GDELT_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
-GDELT_QUERY = "(шахеди OR шахедів OR БпЛА OR дрони OR ракети OR балістика OR КАБ OR вибухи OR ППО) sourcelang:ukrainian"
+# GDELT matches keywords against its English translation of each article (a Cyrillic
+# query returned nothing); titles come back in the original language.
+GDELT_QUERY = '(drone OR drones OR missile OR missiles OR ballistic OR shahed OR "air raid" OR explosions) sourcelang:ukrainian'
+GDELT_WAITS = (30, 60, 120)  # seconds to wait after HTTP 429 (shared runner IPs hit the limit)
 TAG_RE = re.compile(r"<[^>]+>")
 
 
@@ -97,7 +101,15 @@ def gdelt_window(start: pd.Timestamp, end: pd.Timestamp, query: str = GDELT_QUER
         "query": query, "mode": "artlist", "format": "json", "maxrecords": "250", "sort": "dateasc",
         "startdatetime": f"{start:%Y%m%d%H%M%S}", "enddatetime": f"{end:%Y%m%d%H%M%S}",
     }
-    raw = get(f"{GDELT_URL}?{urllib.parse.urlencode(q)}", tries=4)
+    url = f"{GDELT_URL}?{urllib.parse.urlencode(q)}"
+    for wait in (*GDELT_WAITS, None):
+        try:
+            raw = get(url, tries=1)
+            break
+        except urllib.error.HTTPError as e:
+            if e.code != 429 or wait is None:
+                raise
+            time.sleep(wait)
     try:
         arts = json.loads(raw.decode("utf-8", "replace") or "{}").get("articles", [])
     except ValueError:
@@ -112,7 +124,7 @@ def gdelt_window(start: pd.Timestamp, end: pd.Timestamp, query: str = GDELT_QUER
     return out
 
 
-def backfill_gdelt(root, days: float = 90, window_h: int = 3, max_minutes: float = 120, pause: float = 5.5,
+def backfill_gdelt(root, days: float = 90, window_h: int = 3, max_minutes: float = 120, pause: float = 10,
                    log=print) -> dict:
     """Article lists in `window_h`-hour windows, oldest first, resumable via state.json."""
     st = archive.read_state(root, "news", "gdelt")

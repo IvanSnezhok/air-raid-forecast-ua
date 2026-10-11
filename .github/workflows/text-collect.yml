@@ -54,13 +54,14 @@ jobs:
           import time, pandas as pd
           from airraid.text import news
           end = pd.Timestamp.now(tz="UTC").floor("h"); start = end - pd.Timedelta(hours=6)
+          time.sleep(20)
           for q in (news.GDELT_QUERY, "(drone OR drones OR missile OR missiles OR ballistic OR shahed) sourcecountry:ukraine"):
               try:
                   rows = news.gdelt_window(start, end, q)
                   print(len(rows), q); [print("  ", r["date"], r["text"][:100]) for r in rows[:5]]
               except Exception as e:
                   print("ERROR", q, repr(e))
-              time.sleep(6)
+              time.sleep(20)
           PY
       - name: GDELT news history
         if: github.event_name == 'push' || (inputs.gdelt_days != '' && inputs.gdelt_days != '0')
