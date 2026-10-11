@@ -31,6 +31,7 @@ TIME_COL = {
     "polls": "observed_at",  # one row per alerts.in.ua poll (also when nothing is active)
     "alerts_active": "observed_at",  # every record of every poll, all levels and types
     "alerts_history": "fetched_at",  # month_ago records, deduplicated on append
+    "history_pulls": "fetched_at",  # one row per history request (also when nothing was new)
     "forecasts": "issued_at",  # the forecast log
     "verification": "verified_at",  # scored forecasts
 }
@@ -81,9 +82,8 @@ def append(root: Path | str, kind: str, df: pd.DataFrame) -> list[Path]:
         # a stored copy of a row was fetched after the row's event started, so only
         # partitions from then on need to be read
         lo = pd.to_datetime(df["started_at"], utc=True).min() if "started_at" in df else None
-        old = load(root, kind, raw=True, since=None if lo is None or pd.isna(lo) else lo.floor("D"))
-        if len(old):
-            df = df[~_key_frame(df, key).isin(set(_key_frame(old, key)))]
+        known = _known_keys(Path(root), kind, None if lo is None or pd.isna(lo) else lo.floor("D"))
+        df = df[~_key_frame(df, key).isin(known)]
         if df.empty:
             return []
     out = []
@@ -95,7 +95,25 @@ def append(root: Path | str, kind: str, df: pd.DataFrame) -> list[Path]:
         path = d / f"{stamp}-{digest}.parquet"
         part.reset_index(drop=True).to_parquet(path, index=False, compression="zstd")
         out.append(path)
+    if kind in DEDUP_KEY:
+        hashes, read = _KEYS.setdefault((str(Path(root).resolve()), kind), (set(), set()))
+        hashes.update(_key_frame(df, DEDUP_KEY[kind]))
+        read.update(out)
     return out
+
+
+# Key hashes of the part files already read, per (root, kind): appends in one
+# process (a history pull writes one part per request) read each file once.
+_KEYS: dict[tuple[str, str], tuple[set, set]] = {}
+
+
+def _known_keys(root: Path, kind: str, since: pd.Timestamp | None) -> set:
+    hashes, read = _KEYS.setdefault((str(root.resolve()), kind), (set(), set()))
+    new = [f for f in _files(root, kind, since, None) if f not in read]
+    if new:
+        hashes.update(_key_frame(_read(new), DEDUP_KEY[kind]))
+        read.update(new)
+    return hashes
 
 
 def load(root: Path | str, kind: str, as_of: pd.Timestamp | None = None, since: pd.Timestamp | None = None,

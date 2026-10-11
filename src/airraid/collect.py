@@ -29,7 +29,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import store
-from .live_alerts import ACTIVE_URL, API, OBLAST_UID, fetch, locations, parse_alerts, to_frame
+from .live_alerts import ACTIVE_URL, API, OBLAST_UID, fetch, locations, parse_alerts, raion_uids, to_frame
 
 SKIP_OBLASTS = {"Luhanska oblast"}  # permanent alert since 2022, excluded from the model
 STATE = "_state/history.json"
@@ -83,8 +83,7 @@ def _save_state(root: Path, state: dict) -> None:
 
 def history_uids(scope: str, state: dict) -> list[str]:
     obl = [u for u, r in OBLAST_UID.items() if r not in SKIP_OBLASTS]
-    loc = locations()
-    raions = loc[(loc["level"] == "raion") & (loc["oblast"] != "") & ~loc["oblast"].isin(SKIP_OBLASTS)]["uid"].tolist()
+    raions = [u for u in raion_uids() if locations().at[u, "oblast"] not in SKIP_OBLASTS]
     if scope == "oblast":
         return obl
     if scope == "raion":
@@ -152,6 +151,8 @@ def history(root: Path, token: str, scope: str = "auto", max_requests: int | Non
                   f"{len(df)} records {levels}, from {entry['first']}, {'new rows written' if written else 'nothing new'}")
             if uid in OBLAST_UID and any(lv not in ("oblast", "city") for lv in levels):
                 state["oblast_history_has_subregions"] = True
+        store.append(root, "history_pulls", pd.DataFrame([{
+            "fetched_at": t, "uid": uid, "status": status, "n_records": entry.get("n") if status != 304 else None}]))
         state["uids"][uid] = entry
         _save_state(root, state)
     print(f"history: {n_req} requests; oblast history has raion/hromada records: "
