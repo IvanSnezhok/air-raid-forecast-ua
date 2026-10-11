@@ -138,6 +138,11 @@ function setupMapEvents() {
   });
 }
 
+// What the map shows as "under alert now": alerts.in.ua reports an air raid alert somewhere in the
+// oblast (`reported`, display only). The model's input (`active`, training definition) can be off
+// while a long frontline alert is still open, so it is not used for colouring.
+const isOn = (r) => !!(r && (r.reported ?? r.active));
+
 function regionData(id) {
   const st = S.state?.regions.find((r) => r.id === id);
   const fc = S.forecast?.regions.find((r) => r.id === id);
@@ -164,7 +169,7 @@ function tipHTML(r) {
     return `<b>${esc(fullName(r))}</b><br>${LEVEL_UK[t.level] || ""}: найімовірніше ${TYPE_PHRASE[t.most_likely] || ""}`;
   }
   if (S.layer === "now") {
-    const s = r.active ? `тривога ${r.since ? "вже " + duration(r.since) : ""}` : "тривоги немає";
+    const s = isOn(r) ? `тривога ${r.active && r.since ? "вже " + duration(r.since) : ""}` : "тривоги немає";
     return `<b>${esc(fullName(r))}</b><br>${s}`;
   }
   const p = r.probs?.[S.target]?.[S.horizon];
@@ -184,7 +189,7 @@ function paintMap() {
     let label = null;
     let p = null;
     if (r && S.layer === "now") {
-      fill = r.active ? css("--alert") : css("--calm");
+      fill = isOn(r) ? css("--alert") : css("--calm");
     } else if (r && S.forecast && S.target === "type") {
       const t = typeAt(r);
       fill = t?.p_red == null ? css("--calm") : levelColor(t.p_red);
@@ -196,7 +201,7 @@ function paintMap() {
       label = pct(p);
     }
     node.style.fill = fill;
-    node.setAttribute("aria-label", r ? `${fullName(r)}: ${S.layer === "now" ? (r.active ? "тривога" : "немає тривоги") : pct(p)}` : "");
+    node.setAttribute("aria-label", r ? `${fullName(r)}: ${S.layer === "now" ? (isOn(r) ? "тривога" : "немає тривоги") : pct(p)}` : "");
     const at = r && S.geo.labels[r.name];
     if (label && at) {
       const isCity = r.name === "Kyiv City";
@@ -309,7 +314,7 @@ function renderSummary() {
   const st = S.state, fc = S.forecast;
   const tiles = [];
   if (st) {
-    const n = st.regions.filter((r) => r.active).length;
+    const n = st.regions.filter(isOn).length;
     tiles.push(`<div class="stat ${n ? "hot" : ""}"><div class="k">Під тривогою зараз</div>
       <div class="v">${n} <small>з ${st.regions.length} областей</small></div>
       <div class="s">${st.source === "alerts.in.ua" ? "alerts.in.ua, " + fmtTime.format(new Date(st.as_of)) : "за датасетом, " + fmtFull.format(new Date(st.as_of))}</div></div>`);
@@ -341,7 +346,7 @@ function renderSummary() {
 function renderHeadline() {
   const st = S.state, fc = S.forecast;
   if (!st || !fc) return;
-  const on = st.regions.filter((r) => r.active);
+  const on = st.regions.filter(isOn);
   const live = st.source === "alerts.in.ua";
   const when = live ? "Зараз" : `На ${fmtTime.format(new Date(st.as_of))} (кінець датасету)`;
   let a = on.length
@@ -380,7 +385,7 @@ function renderRank() {
   $("#rank-title").textContent = "Усі області";
   if (!fc) { t.innerHTML = ""; return; }
   const hs = fc.horizons;
-  const active = new Set((S.state?.regions || []).filter((r) => r.active).map((r) => r.id));
+  const active = new Set((S.state?.regions || []).filter(isOn).map((r) => r.id));
   const key = S.layer === "now" ? (r) => (active.has(r.id) ? 2 : 0) + r.probs.active[1]
     : S.target === "type" ? (r) => r.types?.[S.horizon]?.p_red ?? -1 : (r) => r.probs[S.target][S.horizon];
   const rows = [...fc.regions].sort((a, b) => key(b) - key(a));
@@ -412,7 +417,9 @@ async function select(id) {
 function renderDetail(d) {
   const st = S.state?.regions.find((r) => r.id === d.id);
   const hs = Object.keys(d.probs.active).map(Number);
-  const status = st?.active
+  const status = isOn(st) && !st.active
+    ? `<span class="status on"><span class="b"></span>Тривога (за alerts.in.ua)</span>`
+    : st?.active
     ? `<span class="status on"><span class="b"></span>Тривога${st.since ? ` з ${fmtTime.format(new Date(st.since))}, ${duration(st.since, S.state.source === "alerts.in.ua" ? new Date() : new Date(S.state.as_of))}` : ""}</span>`
     : `<span class="status off"><span class="b"></span>Тривоги немає</span>`;
   const locs = st?.locations?.length ? `<p class="small muted">Під тривогою: ${st.locations.map(esc).join(", ")}</p>` : "";
