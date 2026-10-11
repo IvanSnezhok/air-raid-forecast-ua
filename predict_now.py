@@ -37,7 +37,9 @@ from airraid import store
 from airraid.data import build_grid, download, load_alerts
 from airraid.features import HORIZONS, add_horizon_features, build_features, hourly_fraction, hourly_starts, labels
 from airraid.live_alerts import OBLAST_EN as UK_TO_EN  # noqa: F401  (old import name)
-from airraid.live_alerts import KEY, fetch_active, gap_alerts, parse_active, store_records, to_frame
+from airraid.live_alerts import (
+    KEY, LIVE_EXPIRY_HOURS, fetch_active, gap_alerts, parse_active, store_records, to_frame,
+)
 from airraid.models import GBM
 
 ROOT = Path(__file__).resolve().parent
@@ -169,9 +171,11 @@ def main():
     # Origin: now when something live is known (a token, or store polls up to now),
     # else the last hour of the dataset.
     origin = now.floor("h")
-    records, covered = None, None
+    records, covered, last_poll = None, None, None
     if args.store is not None:
         records, covered = store_records(args.store, origin, hist_end)
+        polls = store.load(args.store, "polls", as_of=origin, since=origin - pd.Timedelta(days=1))
+        last_poll = polls["observed_at"].max() if len(polls) else None
     if token:
         fresh = live_records(token, origin)
         records = fresh if records is None else (
@@ -180,10 +184,10 @@ def main():
         print(f"alerts.in.ua: {len(fresh)} active records that started before {origin:%H:%M} UTC")
     elif args.as_of:
         print(f"replay as of {origin}")
-    elif covered is None or covered < origin - pd.Timedelta(minutes=30):
+    elif last_poll is None or last_poll < origin - pd.Timedelta(hours=LIVE_EXPIRY_HOURS):
         origin = hist_end.floor("h")
-        records = None
-        print("No ALERTS_IN_UA_TOKEN and no recent store polls: forecasting as of the end of the dataset")
+        records = covered = None
+        print("No ALERTS_IN_UA_TOKEN and no store poll in the last hour: forecasting as of the end of the dataset")
     known_until = max(hist_end, covered) if covered is not None else hist_end
     if origin - known_until > pd.Timedelta(hours=6):
         print(f"WARNING: alert record complete only up to {known_until}, {origin - known_until} before the "
