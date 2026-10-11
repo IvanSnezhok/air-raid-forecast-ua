@@ -7,7 +7,10 @@ Wraps the modelling package (`airraid`) for serving:
   * scores each model on a held-out last week before the final refit, so the UI
     can show how the model that is actually serving performed;
   * makes the forecast for the current hour, with live alerts from alerts.in.ua
-    added on top of the history when a token is configured.
+    added on top of the history when a token is configured. Live records only
+    ever extend the history after the dataset ends (airraid.live_alerts.
+    after_dataset) and never enter training; their oblast-level state follows
+    the training data's definition (see live.py).
 
 Feature engineering and the model class are imported from `airraid` unchanged,
 so the app inherits the no-leakage guarantees tested in tests/test_leakage.py.
@@ -27,6 +30,8 @@ import pandas as pd
 
 from airraid.data import build_grid, download, load_alerts
 from airraid.evaluate import reliability, scores
+from airraid.live_alerts import after_dataset
+from airraid.live_alerts import parse_active as parse_records
 from airraid.features import (
     HORIZONS, KYIV, add_horizon_features, build_features, hourly_fraction, hourly_starts, labels, origin_hours,
 )
@@ -35,7 +40,7 @@ from airraid.models import GBM, feature_columns
 from .config import Settings
 from .journal import ForecastJournal, LiveRecorder
 from .threats import ThreatForecast
-from .live import LiveState, fetch_active, parse_active, state_from_dataset
+from .live import LiveState, fetch_active, state_from_alerts, state_from_dataset
 from .regions import slug, uk_name
 
 log = logging.getLogger("airraid_app")
@@ -258,8 +263,9 @@ class ForecastEngine:
         state = None
         if self.s.alerts_token:
             try:
-                payload = fetch_active(self.s.alerts_token)
-                state = parse_active(payload, regions, pd.Timestamp.now(tz="UTC"))
+                records = parse_records(fetch_active(self.s.alerts_token))
+                now = pd.Timestamp.now(tz="UTC")
+                state = state_from_alerts(records, regions, now, cleared=self.recorder.cleared(records, now))
             except Exception as e:
                 log.warning("alerts.in.ua failed: %s", e)
                 state = state_from_dataset(alerts, regions, error=f"alerts.in.ua недоступний: {type(e).__name__}")
@@ -296,17 +302,17 @@ class ForecastEngine:
         return result
 
     def _history(self, alerts: pd.DataFrame) -> pd.DataFrame:
-        """Dataset history plus alerts recorded from live polls after it."""
-        rec = self.recorder.alerts()
+        """Dataset history plus alerts recorded from live polls after it (never before its end)."""
+        rec = after_dataset(self.recorder.alerts(), alerts)
         if rec.empty:
             return alerts
         return pd.concat([alerts, rec[rec["region"].isin(self.regions)]], ignore_index=True)
 
     def _compute(self, alerts, hist_end, origin, ongoing, live: LiveState) -> tuple[dict, pd.DataFrame]:
-        alerts = self._history(alerts)
+        dataset, alerts = alerts, self._history(alerts)
         if not ongoing.empty:
             extra = ongoing.assign(end=origin + pd.Timedelta(hours=1), naive=False)  # end is never used as a feature
-            alerts = pd.concat([alerts, extra], ignore_index=True)
+            alerts = pd.concat([alerts, after_dataset(extra, dataset)], ignore_index=True)
         grid = build_grid(alerts, data_end=origin)
         H, S = hourly_fraction(grid), hourly_starts(grid)
         k_now = grid.n_minutes // 60

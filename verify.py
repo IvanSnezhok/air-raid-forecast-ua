@@ -1,22 +1,33 @@
 """Score logged forecasts against what actually happened.
 
-    python verify.py
+    python verify.py [--store live-data] [path/to/log]
 
-Reads reports/forecast_log.csv (written by predict_now.py; same columns as the web
-app's ForecastJournal, so `python verify.py path/to/journal.parquet` also works), refreshes the alert
-history and, for every forecast whose target window is fully covered by the
-history, records the outcome. Writes:
+Forecasts come from reports/forecast_log.csv (written by predict_now.py; same
+columns as the web app's ForecastJournal, so a journal .parquet works too) or,
+with --store, from the point-in-time store's `forecasts`. For every forecast
+whose target window is covered by the alert record, the outcome is looked up
+with exactly the training labels (features.labels; tests/test_verify.py):
 
-  reports/verification.csv           one row per verified forecast (+ outcome)
-  reports/verification_summary.json  Brier of the model vs the 28-day climatology
-                                     over the last 24 h, 7 days and all time,
-                                     per target and horizon
+  * dataset: the volunteer file, complete up to its last hour (label_source
+    "dataset", the training definition itself);
+  * store (with --store): after the dataset ends, oblast-level alerts rebuilt
+    from alerts.in.ua history pulls and polls (live_alerts.oblast_intervals),
+    up to the moment the store is complete (label_source "store"). This makes
+    verification possible within hours instead of a day later, but these labels
+    only approximate the volunteer ones; they are reported separately and are
+    replaced by dataset labels once the dataset covers the window.
 
-Forecasts are never re-scored with information they did not have: the model
-probability was fixed when it was logged; only the outcome is looked up now.
+Writes reports/verification.csv and reports/verification_summary.json (Brier of
+the model vs the 28-day climatology over the last 24 h, 7 days and all time,
+per target and horizon); with --store also appends newly verified rows to the
+store's `verification`. Forecast probabilities are never recomputed: they are
+the ones logged when the forecast was issued. Verification is monitoring only;
+it does not feed back into model weights (models are refit periodically on the
+dataset by predict_now.py).
 """
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -25,12 +36,30 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+from airraid import store as pit
 from airraid.data import build_grid, download, load_alerts
+from airraid.live_alerts import gap_alerts, store_records
 
 ROOT = Path(__file__).resolve().parent
 LOG_PATH = ROOT / "reports" / "forecast_log.csv"
 OUT_PATH = ROOT / "reports" / "verification.csv"
 SUMMARY_PATH = ROOT / "reports" / "verification_summary.json"
+
+
+def label_grid(alerts: pd.DataFrame, store_root: Path | None, now: pd.Timestamp):
+    """(grid, dataset_end): the alert record labels are read from.
+
+    The dataset up to its last full hour; with a store, extended by oblast-level
+    alerts rebuilt from the store's records up to where the store is complete.
+    """
+    hist_end = alerts["start"].max()
+    dataset_end = hist_end.floor("h")
+    if store_root is not None:
+        rec, covered = store_records(store_root, now, hist_end)
+        if covered is not None and covered.floor("h") > dataset_end:
+            gap = gap_alerts(rec, covered, alerts)
+            return build_grid(pd.concat([alerts, gap], ignore_index=True), data_end=covered.floor("h")), dataset_end
+    return build_grid(alerts, data_end=dataset_end), dataset_end
 
 
 def outcomes(log: pd.DataFrame, grid) -> np.ndarray:
@@ -80,25 +109,64 @@ def summarise(v: pd.DataFrame, now: pd.Timestamp) -> dict:
     return out
 
 
-def main():
-    path = Path(sys.argv[1]) if len(sys.argv) > 1 else LOG_PATH
-    if not path.exists():
-        print(f"no forecast log at {path}: run predict_now.py first")
-        return
-    download()
-    alerts = load_alerts()
-    grid = build_grid(alerts)  # complete up to the last hour in the history file
-    log = pd.read_parquet(path) if path.suffix == ".parquet" else pd.read_csv(path)
+def verify(log: pd.DataFrame, alerts: pd.DataFrame, store_root: Path | None = None,
+           now: pd.Timestamp | None = None) -> tuple[pd.DataFrame, dict]:
+    """Verified rows (with y, label_source) and the summary."""
+    now = pd.Timestamp.now(tz="UTC") if now is None else now
+    grid, dataset_end = label_grid(alerts, store_root, now)
+    log = log.copy()
     log["y"] = outcomes(log, grid)
+    window_end = pd.to_datetime(log["origin"], utc=True) + pd.to_timedelta(log["horizon"], unit="h")
+    log["label_source"] = np.where(window_end <= dataset_end, "dataset", "store")
     v = log.dropna(subset=["y"]).reset_index(drop=True)
     v["hit_at_0.5"] = ((v["p"] >= 0.5) == (v["y"] == 1)).astype(int)
     v["brier_model"] = (v["p"] - v["y"]) ** 2
     v["brier_clim"] = (v["clim"] - v["y"]) ** 2
-    v.to_csv(OUT_PATH, index=False)
-    summary = summarise(v, grid.data_end)
+    record_end = grid.t0 + pd.Timedelta(minutes=grid.n_minutes)
+    summary = summarise(v, record_end)
     summary["pending"] = int(log["y"].isna().sum())
+    summary["dataset_end_utc"] = str(dataset_end)
+    summary["n_verified_by_label_source"] = v["label_source"].value_counts().to_dict()
+    return v, summary
+
+
+def read_forecasts(path: Path | None, store_root: Path | None) -> pd.DataFrame:
+    parts = []
+    if store_root is not None:
+        parts.append(pit.load(store_root, "forecasts"))
+    if path is not None and path.exists():
+        parts.append(pd.read_parquet(path) if path.suffix == ".parquet" else pd.read_csv(path))
+    parts = [p for p in parts if len(p)]
+    if not parts:
+        return pd.DataFrame()
+    log = pd.concat(parts, ignore_index=True)
+    for c in ("origin", "issued_at"):
+        if c in log:
+            log[c] = pd.to_datetime(log[c], utc=True)
+    # the same forecast can be in both the CSV log and the store
+    return log.drop_duplicates(["origin", "region", "target", "horizon"], keep="first").reset_index(drop=True)
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Score logged forecasts against what actually happened.")
+    ap.add_argument("log", nargs="?", type=Path, default=None, help=f"forecast log (default {LOG_PATH})")
+    ap.add_argument("--store", type=Path, default=None, help="point-in-time store: forecasts + labels after the dataset")
+    args = ap.parse_args()
+    path = args.log or (LOG_PATH if args.store is None or LOG_PATH.exists() else None)
+    log = read_forecasts(path, args.store)
+    if log.empty:
+        print(f"no forecasts in {path or ''} {args.store or ''}: run predict_now.py first")
+        return
+    download()
+    now = pd.Timestamp.now(tz="UTC")
+    v, summary = verify(log, load_alerts(), args.store, now)
+    OUT_PATH.parent.mkdir(exist_ok=True)
+    v.to_csv(OUT_PATH, index=False)
     SUMMARY_PATH.write_text(json.dumps(summary, indent=2))
-    print(f"verified {len(v)} forecasts, {summary['pending']} still pending (history ends {grid.data_end})")
+    if args.store is not None and len(v):
+        pit.append(args.store, "verification", v.assign(verified_at=now.floor("s")))
+    print(f"verified {len(v)} forecasts ({summary['n_verified_by_label_source']}), {summary['pending']} still "
+          f"pending (record until {summary['verified_until_utc']}, dataset until {summary['dataset_end_utc']})")
     for g in summary["groups"]:
         if g["window"] == "7d":
             print(f"  {g['target']:6s} h={g['horizon_h']}  n={g['n']:5d}  brier model {g['brier_model']:.4f}  "
