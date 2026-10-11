@@ -39,13 +39,24 @@ jobs:
         run: |
           mkdir -p reports
           python predict_now.py
+      - name: Threat-type forecast
+        # needs the Air Force post history from the threat-labels workflow
+        continue-on-error: true
+        run: |
+          pip install beautifulsoup4
+          git fetch --depth=1 origin threat-labels-data
+          git show FETCH_HEAD:tg_kpszsu.parquet > "$RUNNER_TEMP/tg_kpszsu.parquet"
+          python threat-type/predict_type_now.py --posts "$RUNNER_TEMP/tg_kpszsu.parquet"
       - name: Build page
-        run: python demo/make_site.py reports/forecast_now.csv site
+        run: |
+          python demo/make_site.py reports/forecast_now.csv site
+          cp threat-type/reports/type_forecast_now.csv threat-type/reports/type_forecast_meta.json site/ 2>/dev/null || true
       - uses: actions/upload-artifact@v4
         with:
           name: forecast
           path: |
             reports/forecast_now.csv
+            threat-type/reports/type_forecast_now.csv
             site/
           retention-days: 14
       - if: vars.PAGES_ENABLED == 'true'
