@@ -794,6 +794,10 @@ const METHOD_SHORT = {
   lightgbm: "модель району + історія", lightgbm_state: "модель району", oblast_x_share: "область × частка району", oblast: "прогноз області",
 };
 const shareStale = (sp) => !!sp && new Date() - new Date(sp[1]) > 3 * 864e5;
+// "Харківська" -> "Харківської" (області), for "of the oblast" phrases
+const oblGen = (r) => (r.oblast === "Kyiv City" ? "м. Києва" : `${r.oblast_uk.replace(/а$/, "ої")} області`);
+// alert duration up to the moment the live state describes (a static page can be hours old)
+const liveTo = () => (S.raions?.live_as_of ? new Date(S.raions.live_as_of) : new Date());
 const LEVEL_PHRASE = { oblast: "тривога на всю область", raion: "тривога на весь район", hromada: "тривога в частині району" };
 const raionById = (id) => S.raions?.raions.find((r) => r.id === id);
 const raionGeo = (id) => S.rgeo?.raions[id];
@@ -991,7 +995,7 @@ function raionTipHTML(r, id) {
   const head = `<b>${esc(r.name_uk)}</b> <span class="tipsub">${esc(r.oblast === "Kyiv City" ? "" : r.oblast_uk + " обл.")}</span>`;
   if (S.layer === "now") {
     if (!r.live) return `${head}<br>немає живих даних`;
-    return `${head}<br>${r.live.active ? `${LEVEL_PHRASE[r.live.level] || "тривога"}${r.live.since ? ", " + duration(r.live.since) : ""}` : "тривоги немає"}`;
+    return `${head}<br>${r.live.active ? `${LEVEL_PHRASE[r.live.level] || "тривога"}${r.live.since ? ", " + duration(r.live.since, liveTo()) : ""}` : "тривоги немає"}`;
   }
   const t = rTarget(), p = r.probs?.[t]?.[S.horizon];
   return `${head}<br>${pct(p)}, ${p == null ? "" : LEVELS[levelIdx(p)][1]} ймовірність<br><span class="tipsub">${METHOD_SHORT[r.method?.[t]?.[S.horizon]] || ""}</span>`;
@@ -1022,7 +1026,7 @@ function renderRaionDetail(d) {
   const status = !lv
     ? `<span class="status off"><span class="b"></span>Немає живих даних по районах</span>`
     : lv.active
-      ? `<span class="status on"><span class="b"></span>${LEVEL_PHRASE[lv.level] || "Тривога"}${lv.since ? ` з ${fmtTime.format(new Date(lv.since))}, ${duration(lv.since)}` : ""}</span>`
+      ? `<span class="status on"><span class="b"></span>${LEVEL_PHRASE[lv.level] || "Тривога"}${lv.since ? ` з ${fmtTime.format(new Date(lv.since))}, ${duration(lv.since, liveTo())}` : ""}</span>`
       : `<span class="status off"><span class="b"></span>Тривоги немає</span>`;
   const locs = lv?.locations?.length ? `<p class="small muted">Під тривогою: ${lv.locations.map(esc).join(", ")}</p>` : "";
   const hs = Object.keys(d.probs.active).map(Number);
@@ -1034,7 +1038,7 @@ function renderRaionDetail(d) {
       <td>${bar(d.probs.active[h])}</td><td>${bar(d.probs.onset[h])}</td></tr>`).join("");
   const h3 = hs.includes(3) ? 3 : hs[0];
   const ob = d.oblast_probs;
-  const cmp = ob && d.oblast !== "Kyiv City" ? `<p class="small muted">Для всієї ${esc(d.oblast_uk)} області: тривога в наступну годину ${pct(ob.active[1])}, нова тривога за ${h3} год ${pct(ob.onset[h3])}.</p>` : "";
+  const cmp = ob && d.oblast !== "Kyiv City" ? `<p class="small muted">Для всієї ${esc(oblGen(d))}: тривога в наступну годину ${pct(ob.active[1])}, нова тривога за ${h3} год ${pct(ob.onset[h3])}.</p>` : "";
   const sp = d.share_period;
   const shareNote = methods.has("oblast_x_share") && sp
     ? `<p class="small muted">Частка району: скільки тривог області за 28 днів (${fmtDay.format(new Date(sp[0]))} – ${fmtDay.format(new Date(sp[1]))}) зачепили цей район:
@@ -1055,9 +1059,9 @@ function renderRaionDetail(d) {
     const obl = (ev.oblast || []).find((x) => x.target === "onset" && x.horizon_h === 3);
     evHTML = `<h3>Наскільки цьому можна вірити</h3>
       <p class="small muted">Перевірка на ${per} (останні 4 тижні з районними даними), усі райони разом. Перевага над кліматологією району за Brier score:</p>
-      <div class="tablewrap"><table class="mt"><thead><tr><th></th><th>Метод</th><th>Перевага</th><th>Просто прогноз області</th></tr></thead>
+      <div class="tablewrap"><table class="mt"><thead><tr><th></th><th>Метод</th><th>Перевага</th><th>Прогноз області</th></tr></thead>
       <tbody>${line("active", 1)}${line("onset", 1)}${line("onset", 3)}${line("onset", 6)}</tbody></table></div>
-      ${obl && obl[`bss_${evalName(d.method.onset[3])}`] !== undefined ? `<p class="small muted">Райони ${esc(d.oblast_uk)} області, нова тривога за 3 год: частота ${pct(obl.base_rate)}, перевага
+      ${obl && obl[`bss_${evalName(d.method.onset[3])}`] !== undefined ? `<p class="small muted">Райони ${esc(oblGen(d))}, нова тривога за 3 год: частота ${pct(obl.base_rate)}, перевага
         ${signedPct(obl[`bss_${evalName(d.method.onset[3])}`])} (метод «${METHOD_SHORT[d.method.onset[3]]}»).</p>` : ""}`;
   }
   $("#detail").innerHTML = `

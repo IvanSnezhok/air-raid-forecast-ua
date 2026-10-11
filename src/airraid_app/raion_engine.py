@@ -217,34 +217,40 @@ class RaionForecaster:
     def prepare(self, vol_alerts: pd.DataFrame, now: pd.Timestamp, lgb_threads: int = 2) -> None:
         """Shares from the latest covered 28 days; raion models trained on the raion history.
 
-        The current-state model only needs a covered past to learn from, so the
-        official file suffices; the full model is trained only when the raion
-        history reaches the forecast moment (otherwise it could not be applied).
+        `vol_alerts` is the volunteer dataset only (no live records: training
+        never sees live data). Everything learnt here ends where both the raion
+        history and the dataset end, so no feature reads "no alerts" for hours
+        the dataset does not cover yet. The current-state model only needs a
+        covered past to learn from (the official file suffices); the full model
+        is trained only when the raion history reaches `now`, the moment
+        forecasts will be made for, since it needs the 28 days before it.
         """
         self.shares, self.share_period, self.models, self.model_info = {}, None, {}, {}
         hist = self.history
-        if hist is None or hist.alerts.empty:
+        if hist is None or hist.alerts.empty or vol_alerts.empty:
             return
-        end = min(hist.known_until() or now, now).floor("h")
-        self._prepare_shares(vol_alerts, end)
-        for kind in MODEL_KINDS if self.s.raion_models else ():
+        until = min(now, vol_alerts["start"].max()).floor("h")
+        share_end = hist.latest_window(pd.Timedelta(hours=SHARE_WINDOW_H), until)
+        if share_end is None:
+            log.warning("raion history has no covered 28 days before %s: no shares", until)
+        else:
+            self._prepare_shares(vol_alerts, share_end.floor("h"))
+        train_end = hist.latest_window(pd.Timedelta(days=14), until)
+        for kind in MODEL_KINDS if self.s.raion_models and train_end is not None else ():
             if not self._wanted(kind):
                 continue
-            if kind == "lightgbm" and not (hist.covered(end - pd.Timedelta(days=29), end) and now - end <= pd.Timedelta(hours=2)):
-                log.info("full raion model not trained: raion history does not reach the forecast moment")
+            if kind == "lightgbm" and not hist.covered(now - pd.Timedelta(days=29), now - pd.Timedelta(hours=1)):
+                log.info("full raion model not trained: raion history does not reach %s", now)
                 continue
             try:
-                self._train(kind, vol_alerts, end, lgb_threads)
+                self._train(kind, vol_alerts, train_end.floor("h"), lgb_threads)
             except Exception:  # noqa: BLE001 - fall back to the other methods
                 log.exception("training %s raion models failed", kind)
 
     def _prepare_shares(self, vol_alerts: pd.DataFrame, end: pd.Timestamp) -> None:
-        hist = self.history
         start = end - pd.Timedelta(hours=SHARE_WINDOW_H)
-        if not hist.covered(start - pd.Timedelta(days=1), end):
-            log.warning("raion history does not cover the 28 days before %s: no shares", end)
-            return
-        ra = hist.alerts[hist.alerts["start"] >= start - pd.Timedelta(days=2)]
+        hist = self.history
+        ra = hist.alerts[hist.alerts["end"] > start - pd.Timedelta(days=2)]
         va = vol_alerts[vol_alerts["start"] >= start - pd.Timedelta(days=3)]
         inp = make_inputs(alerts_as_of(ra, end), alerts_as_of(va, end), end, regions=self._regions(vol_alerts),
                           t0=(start - pd.Timedelta(days=2)).floor("D"))

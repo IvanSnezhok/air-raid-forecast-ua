@@ -257,6 +257,14 @@ class RaionHistory:
     def known_until(self) -> pd.Timestamp | None:
         return max((b for _, b in self.spans), default=None)
 
+    def latest_window(self, length: pd.Timedelta, until: pd.Timestamp) -> pd.Timestamp | None:
+        """Latest end e <= until such that [e - length, e] is covered (None if no span is long enough)."""
+        for a, b in sorted(self.spans, key=lambda x: x[1], reverse=True):
+            e = min(b, until)
+            if e - length >= a:
+                return e
+        return None
+
 
 def load_history(official_path: Path = OFFICIAL_PATH, store_root: Path | None = None,
                  as_of: pd.Timestamp | None = None, since: pd.Timestamp | None = None,

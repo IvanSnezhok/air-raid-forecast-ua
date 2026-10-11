@@ -262,7 +262,7 @@ class ForecastEngine:
         # the moment forecasts will be made for: now with live data, else the end of the dataset
         now = pd.Timestamp.now(tz="UTC") if self.s.alerts_token else self.hist_end.floor("h")
         try:
-            self.raions.prepare(self._history(alerts), now, self.s.lgb_threads)
+            self.raions.prepare(alerts, now, self.s.lgb_threads)  # dataset only: training never sees live data
         except Exception:  # noqa: BLE001 - the oblast forecast must not depend on the raion layer
             log.exception("raion layer preparation failed")
 
