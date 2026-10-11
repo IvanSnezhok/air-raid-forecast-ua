@@ -1,0 +1,43 @@
+# Deploy the web app to a Hugging Face Space (free CPU, Docker SDK).
+#
+# One-time setup:
+#   1. Create a Space at https://huggingface.co/new-space with SDK "Docker".
+#   2. Repo Settings -> Secrets and variables -> Actions:
+#        secret   HF_TOKEN  (a Hugging Face token with write access)
+#        variable HF_SPACE  e.g. "your-name/air-raid-forecast"
+#   3. In the Space settings add the secret ALERTS_IN_UA_TOKEN (optional).
+# The job is skipped until HF_SPACE is set.
+name: deploy-space
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-space
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: vars.HF_SPACE != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Push to the Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_SPACE: ${{ vars.HF_SPACE }}
+        run: |
+          # The Space repo needs its own README with the Docker SDK front matter.
+          cp deploy/huggingface/README.md README.md
+          rm -rf .git/shallow .github
+          git config user.email "actions@github.com"
+          git config user.name "github-actions"
+          git checkout --orphan space
+          git add -A
+          git commit -qm "Deploy ${GITHUB_SHA::7}"
+          git push --force "https://user:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE}" space:main
