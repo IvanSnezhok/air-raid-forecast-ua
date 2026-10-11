@@ -142,3 +142,12 @@ pytest tests/test_leakage.py   # перевірка на витік, качає 
 ```
 
 Мапа: © учасники OpenStreetMap (ODbL), кордони з github.com/EugeneBorshch/ukraine_geojson.
+
+## Static site on GitHub Pages
+
+`python scripts/build_static_site.py site` runs the engine once and writes the UI
+plus precomputed `api/*.json` (state, forecast, regions, metrics, verification,
+threats) that replace the `/api/*` calls. The threat-type layer is hidden when
+`threat-type/reports/type_forecast_now.csv` is missing. The `pages.yml` workflow
+rebuilds and deploys it every 3 hours; enable it once in Settings -> Pages ->
+Source: GitHub Actions.

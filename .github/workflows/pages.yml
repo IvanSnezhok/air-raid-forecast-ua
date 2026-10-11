@@ -1,0 +1,65 @@
+# Publish the web UI as a static site on GitHub Pages (no server).
+#
+# One-time setup: Settings -> Pages -> Source: GitHub Actions.
+# Optional secret ALERTS_IN_UA_TOKEN: without it the page shows the state as of
+# the end of the volunteer dataset instead of the live state.
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "scripts/build_static_site.py"
+      - "reports/run_summary.json"
+      - ".github/workflows/pages.yml"
+  schedule:
+    - cron: "17 */3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - name: Threat-type forecast (optional; the layer is hidden if this fails)
+        continue-on-error: true
+        run: |
+          pip install beautifulsoup4
+          git fetch --depth=1 origin threat-labels-data
+          git show FETCH_HEAD:tg_kpszsu.parquet > "$RUNNER_TEMP/tg_kpszsu.parquet"
+          python threat-type/predict_type_now.py --posts "$RUNNER_TEMP/tg_kpszsu.parquet"
+      - name: Build static site
+        env:
+          ALERTS_IN_UA_TOKEN: ${{ secrets.ALERTS_IN_UA_TOKEN }}
+        run: python scripts/build_static_site.py site
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
