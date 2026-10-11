@@ -69,7 +69,7 @@ const invText = (p) => (darkMode() ? p > 0.6 : p > 0.55);
 
 // ---------------------------------------------------------------- state
 const S = {
-  geo: null, state: null, forecast: null, metrics: null,
+  geo: null, state: null, forecast: null, metrics: null, status: null,
   layer: "now", target: "active", horizon: 1, selected: null, view: "map",
 };
 
@@ -303,8 +303,24 @@ function renderHeadline() {
   if (!dl.childElementCount) dl.innerHTML = fc.regions.map((r) => `<option value="${esc(r.name_uk)}"></option>`).join("");
 }
 
+// When the data was last updated (api/status.json from the pipeline, /api/status on a server).
+const STALE_MIN = 30;
+function updatedAt() {
+  const t = S.status?.updated_at || S.forecast?.issued_at;
+  return t ? new Date(t) : null;
+}
+function staleWarning() {
+  const t = updatedAt();
+  if (!t) return null;
+  const age = Math.round((Date.now() - t) / 60000);
+  return age > STALE_MIN
+    ? `Дані не оновлювались ${age >= 120 ? `${Math.floor(age / 60)} год ${age % 60} хв` : `${age} хв`} (останнє оновлення о ${fmtFull.format(t)} за Києвом). Зазвичай сторінка оновлюється кожні 10 хвилин; прогноз нижче може бути застарілим.`
+    : null;
+}
+
 function renderBanner() {
-  const w = [...(S.forecast?.warnings || [])];
+  const stale = staleWarning();
+  const w = [...(stale ? [stale] : []), ...(S.forecast?.warnings || [])];
   const b = $("#banner");
   b.hidden = !w.length;
   b.innerHTML = w.map((x) => `<p>${esc(x)}</p>`).join("");
@@ -326,7 +342,9 @@ function renderRank() {
       <td>${esc(r.name_uk)}${active.has(r.id) ? '<span class="badge">тривога</span>' : ""}</td>
       ${hs.map((h) => `<td>${cell(r.probs.active[h])}</td>`).join("")}
       ${hs.map((h) => `<td>${cell(r.probs.onset[h])}</td>`).join("")}</tr>`).join("")}</tbody>`;
-  $("#rank-sub").textContent = `прогноз станом на ${fmtFull.format(new Date(fc.origin))} за Києвом`;
+  const w1 = fc.windows?.[1]?.active;
+  $("#rank-sub").textContent = `прогноз від ${fmtFull.format(new Date(fc.origin))} за Києвом` +
+    (w1 ? `; «1-а год» = наступні 60 хв, ${fmtTime.format(new Date(w1[0]))}–${fmtTime.format(new Date(w1[1]))}` : "");
 }
 
 // ---------------------------------------------------------------- detail
@@ -364,7 +382,7 @@ function renderDetail(d) {
   const typeLine = tt?.most_likely
     ? ` Якщо почнеться, найімовірніше це ${TYPE_PHRASE[tt.most_likely] || ""} (${LEVEL_UK[tt.level] || ""}).` : "";
   const brief = `<div class="brief">
-    <p>Тривога в наступну годину ${LIKELY[levelIdx(pa)]}: ${level(pa)} ${pct(pa)}.</p>
+    <p>Тривога в наступні 60 хвилин (з ${fmtTime.format(new Date(d.origin))}) ${LIKELY[levelIdx(pa)]}: ${level(pa)} ${pct(pa)}.</p>
     <p>Нова тривога протягом ${h3} год ${LIKELY[levelIdx(po)]}: ${level(po)} ${pct(po)}.${typeLine}</p></div>`;
   const ver = d.verification?.active_h1 || [];
   const done = ver.filter((x) => x.y != null);
@@ -377,7 +395,7 @@ function renderDetail(d) {
       ${done.length ? `Справдилось ${right} з ${done.length} (поріг 50%).` : "Результати зʼявляться, щойно мине перша прогнозована година."}</p>` : "";
   $("#detail").innerHTML = `
     <h2>${esc(fullName(d))}</h2>${status}${locs}${brief}
-    <p class="small muted">${S.state?.source === "alerts.in.ua" ? "Стан за alerts.in.ua" : "Стан на кінець датасету"}; прогноз станом на ${d.origin_kyiv} за Києвом.</p>
+    <p class="small muted">${S.state?.source === "alerts.in.ua" ? "Стан за alerts.in.ua" : "Стан на кінець датасету"}; прогноз від ${d.origin_kyiv.slice(11)} за Києвом на наступні 60 хв і далі по годинах.</p>
     <h3>Прогноз</h3>
     <table class="probs"><thead><tr><th></th><th>Тривога в цю годину</th><th>Нова тривога за цей час</th></tr></thead><tbody>${rows}</tbody></table>
     ${typesHTML(d.types)}
@@ -649,22 +667,24 @@ async function renderMetrics() {
   let verHTML = "";
   if (ver) {
     const vs = ver.scores || [];
-    const vget = (t, h) => vs.find((r) => r.target === t && r.horizon === h);
-    const vtile = (t, h) => {
-      const r = vget(t, h);
+    const vtile = (t, h, rows = vs, when = "") => {
+      const r = rows.find((x) => x.target === t && x.horizon === h);
       if (!r) return "";
-      return `<div class="stat"><div class="k">${TARGET_UK[t].replace("N", h)}</div>
+      return `<div class="stat"><div class="k">${TARGET_UK[t].replace("N", h)}${when}</div>
         <div class="v ${r.bss_vs_clim > 0 ? "pos" : "neg"}">${signedPct(r.bss_vs_clim)}</div>
-        <div class="s">${r.n} прогнозів · ${r.hit_rate_high != null ? `коли ≥50%, подія була в ${pct(r.hit_rate_high)}` : ""}${r.event_rate_low != null ? `; коли &lt;20%, лише в ${pct(r.event_rate_low)}` : ""}</div></div>`;
+        <div class="s">${r.n} прогнозів (${r.n_origins ?? "?"} запусків) · Brier ${num(r.brier, 3)} проти ${num(r.brier_clim, 3)} · ${r.hit_rate_high != null ? `коли ≥50%, подія була в ${pct(r.hit_rate_high)}` : ""}${r.event_rate_low != null ? `; коли &lt;20%, лише в ${pct(r.event_rate_low)}` : ""}</div></div>`;
     };
     verHTML = `<div class="card"><div class="card-h"><h2>Перевірка живих прогнозів</h2>
         <span class="small muted">${ver.journal_since ? `журнал з ${fmtFull.format(new Date(ver.journal_since))}` : ""}</span></div>
       <p class="small muted">Кожен виданий прогноз зберігається і, щойно відповідна година минає, звіряється з тим, що сталося
-        (за alerts.in.ua і датасетом). Показано перевагу над кліматологією за Brier score.</p>
-      ${vs.length ? `<div class="summary">${vtile("active", 1)}${vtile("onset", 1)}${vtile("onset", 3)}${vtile("onset", 6)}</div>`
+        (за alerts.in.ua і датасетом). Показано перевагу над кліматологією за Brier score; оновлюється з кожним запуском.</p>
+      ${vs.length ? `<h3>Останні 24 години</h3><div class="summary">${["active", 1, "onset", 1, "onset", 3].reduce((a, x, i, arr) => i % 2 ? a : a + vtile(arr[i], arr[i + 1], ver.scores_24h || []), "")}</div>
+        <h3>Останні 7 днів</h3><div class="summary">${vtile("active", 1)}${vtile("onset", 1)}${vtile("onset", 3)}${vtile("onset", 6)}</div>
+        <p class="small muted">Перевірено ${ver.n_forecasts_verified ?? "–"} прогнозів з ${ver.n_verified} запусків; ще чекають на результат: ${Math.max(0, (ver.n_issued || 0) - (ver.n_verified || 0))} запусків.</p>`
         : `<p>Видано прогнозів: ${ver.n_issued}. Перевірених ще немає: потрібно, щоб минули прогнозовані години і зʼявились дані про них.</p>`}</div>`;
   }
   let html = `<h2 style="margin-top:0">Якість моделі</h2>${verHTML}
+    ${ho.start ? "" : `<p class="small muted">Поточні моделі навчені без відкладеного тижня (запасне навчання); метрики зʼявляться після наступного планового навчання.</p>`}
     <h3 style="margin:24px 0 8px">Перевірка на відкладеному тижні</h3>
     <p class="lead">Перед навчанням моделі, що зараз працює, останні ${ho.days} днів (${fmtFull.format(new Date(ho.start))} – ${fmtFull.format(new Date(ho.end))})
       були відкладені. Модель навчилась на даних до них і прогнозувала кожну годину для кожної області так, ніби це відбувалося наживо.
@@ -744,14 +764,16 @@ function render() {
   renderBanner();
   paintMap();
   renderRank();
-  $("#foot-status").textContent = S.state ? `Оновлено о ${fmtTime.format(new Date())}` : "";
+  const up = updatedAt();
+  $("#foot-status").textContent = up ? `Оновлено о ${fmtTime.format(up)} за Києвом${staleWarning() ? " (дані застарілі)" : ""}` : "";
 }
 
 async function refresh() {
   try {
-    const [st, fc] = await Promise.all([getJSON("/api/state"), getJSON("/api/forecast")]);
+    const [st, fc, status] = await Promise.all([getJSON("/api/state"), getJSON("/api/forecast"),
+      getJSON("/api/status").catch(() => null)]);
     const firstLoad = !S.forecast;
-    S.state = st; S.forecast = fc;
+    S.state = st; S.forecast = fc; S.status = status;
     $("#loading").hidden = true;
     if (firstLoad) { buildMap(); setView(); }
     render();
