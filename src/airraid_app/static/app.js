@@ -667,10 +667,11 @@ async function renderMetrics() {
   let verHTML = "";
   if (ver) {
     const vs = ver.scores || [];
-    const vtile = (t, h, rows = vs, when = "") => {
+    const v24 = ver.scores_24h || [];
+    const vtile = (t, h, rows = vs) => {
       const r = rows.find((x) => x.target === t && x.horizon === h);
       if (!r) return "";
-      return `<div class="stat"><div class="k">${TARGET_UK[t].replace("N", h)}${when}</div>
+      return `<div class="stat"><div class="k">${TARGET_UK[t].replace("N", h)}</div>
         <div class="v ${r.bss_vs_clim > 0 ? "pos" : "neg"}">${signedPct(r.bss_vs_clim)}</div>
         <div class="s">${r.n} прогнозів (${r.n_origins ?? "?"} запусків) · Brier ${num(r.brier, 3)} проти ${num(r.brier_clim, 3)} · ${r.hit_rate_high != null ? `коли ≥50%, подія була в ${pct(r.hit_rate_high)}` : ""}${r.event_rate_low != null ? `; коли &lt;20%, лише в ${pct(r.event_rate_low)}` : ""}</div></div>`;
     };
@@ -678,7 +679,7 @@ async function renderMetrics() {
         <span class="small muted">${ver.journal_since ? `журнал з ${fmtFull.format(new Date(ver.journal_since))}` : ""}</span></div>
       <p class="small muted">Кожен виданий прогноз зберігається і, щойно відповідна година минає, звіряється з тим, що сталося
         (за alerts.in.ua і датасетом). Показано перевагу над кліматологією за Brier score; оновлюється з кожним запуском.</p>
-      ${vs.length ? `<h3>Останні 24 години</h3><div class="summary">${["active", 1, "onset", 1, "onset", 3].reduce((a, x, i, arr) => i % 2 ? a : a + vtile(arr[i], arr[i + 1], ver.scores_24h || []), "")}</div>
+      ${vs.length ? `<h3>Останні 24 години</h3><div class="summary">${vtile("active", 1, v24)}${vtile("onset", 1, v24)}${vtile("onset", 3, v24)}</div>
         <h3>Останні 7 днів</h3><div class="summary">${vtile("active", 1)}${vtile("onset", 1)}${vtile("onset", 3)}${vtile("onset", 6)}</div>
         <p class="small muted">Перевірено ${ver.n_forecasts_verified ?? "–"} прогнозів з ${ver.n_verified} запусків; ще чекають на результат: ${Math.max(0, (ver.n_issued || 0) - (ver.n_verified || 0))} запусків.</p>`
         : `<p>Видано прогнозів: ${ver.n_issued}. Перевірених ще немає: потрібно, щоб минули прогнозовані години і зʼявились дані про них.</p>`}</div>`;

@@ -308,12 +308,24 @@ def cmd_keepalive(a) -> None:
     if not ok:
         notice(f"keep-alive: {why}")
         return
-    me = gh("GET", f"/repos/{repo()}/actions/runs/{os.environ['GITHUB_RUN_ID']}")
+    for attempt in range(4):
+        try:
+            me = gh("GET", f"/repos/{repo()}/actions/runs/{os.environ['GITHUB_RUN_ID']}")
+            break
+        except Exception as e:
+            print(f"keep-alive: could not read this run ({type(e).__name__}), retrying")
+            time.sleep(10 * (attempt + 1))
+    else:
+        raise SystemExit("keep-alive: GitHub API unavailable")
     created, wf = parse_ts(me["created_at"]), me["workflow_id"]
 
     def newer() -> list[dict]:
-        return [r for r in runs(wf, ref, per_page=10)
-                if r["id"] != me["id"] and parse_ts(r["created_at"]) > created]
+        try:
+            return [r for r in runs(wf, ref, per_page=10)
+                    if r["id"] != me["id"] and parse_ts(r["created_at"]) > created]
+        except Exception as e:  # a failed check must not end the chain; the next one decides
+            print(f"keep-alive: could not list runs ({type(e).__name__}), checking again")
+            return []
 
     target = next_slot(utcnow()) + timedelta(minutes=a.grace)
     print(f"keep-alive: waiting until {target:%H:%M:%S}Z for the next slot (+{a.grace} min grace)")
@@ -326,7 +338,15 @@ def cmd_keepalive(a) -> None:
     if not ok:
         notice(f"keep-alive: {why}")
         return
-    dispatch(str(wf), ref, {"source": "keepalive", "hop": str(hop + 1)})
+    for attempt in range(4):
+        try:
+            dispatch(str(wf), ref, {"source": "keepalive", "hop": str(hop + 1)})
+            break
+        except Exception as e:
+            print(f"keep-alive: dispatch failed ({type(e).__name__}), retrying")
+            time.sleep(10 * (attempt + 1))
+    else:
+        raise SystemExit("keep-alive: could not dispatch the next run")
     notice(f"keep-alive: no trigger for the {target - timedelta(minutes=a.grace):%H:%M}Z slot; dispatched run (hop {hop + 1}/{max_hops})")
 
 
