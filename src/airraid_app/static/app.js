@@ -1,0 +1,605 @@
+"use strict";
+
+// ---------------------------------------------------------------- helpers
+const $ = (sel, el = document) => el.querySelector(sel);
+const SVGNS = "http://www.w3.org/2000/svg";
+const KYIV_TZ = "Europe/Kyiv";
+const fmtTime = new Intl.DateTimeFormat("uk-UA", { timeZone: KYIV_TZ, hour: "2-digit", minute: "2-digit" });
+const fmtDay = new Intl.DateTimeFormat("uk-UA", { timeZone: KYIV_TZ, day: "numeric", month: "short" });
+const fmtFull = new Intl.DateTimeFormat("uk-UA", { timeZone: KYIV_TZ, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+const kyivHour = (d) => Number(new Intl.DateTimeFormat("en-GB", { timeZone: KYIV_TZ, hour: "2-digit", hour12: false }).format(d)) % 24;
+const pct = (p) => (p == null ? "–" : `${Math.round(p * 100)}%`);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const slug = (name) => name.replace(/ oblast$/, "").toLowerCase().replace(/ /g, "-");
+const fullName = (r) => (r.name === "Kyiv City" ? "м. Київ" : `${r.name_uk} область`);
+const num = (v, d = 3) => (v == null ? "–" : Number(v).toFixed(d));
+
+function duration(fromIso, toDate = new Date()) {
+  const m = Math.max(0, Math.round((toDate - new Date(fromIso)) / 60000));
+  const h = Math.floor(m / 60);
+  return h ? `${h} год ${m % 60} хв` : `${m} хв`;
+}
+
+function el(tag, attrs = {}, parent) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+
+async function getJSON(url) {
+  const r = await fetch(url, { cache: "no-store" });
+  if (!r.ok) {
+    const err = new Error(`${url}: ${r.status}`);
+    err.status = r.status;
+    try { err.body = await r.json(); } catch (_) { /* ignore */ }
+    throw err;
+  }
+  return r.json();
+}
+
+// Sequential ramp read from CSS custom properties, so it follows light/dark theme.
+let RAMP = [];
+function readRamp() {
+  const cs = getComputedStyle(document.documentElement);
+  RAMP = [0, 1, 2, 3, 4, 5].map((i) => {
+    const hex = cs.getPropertyValue(`--r${i}`).trim().replace("#", "");
+    return [0, 2, 4].map((j) => parseInt(hex.slice(j, j + 2), 16));
+  });
+}
+function rampColor(p) {
+  const t = Math.min(1, Math.max(0, p)) * (RAMP.length - 1);
+  const i = Math.min(RAMP.length - 2, Math.floor(t));
+  const f = t - i;
+  const c = RAMP[i].map((v, k) => Math.round(v + (RAMP[i + 1][k] - v) * f));
+  return `rgb(${c.join(",")})`;
+}
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const darkMode = () => window.matchMedia("(prefers-color-scheme: dark)").matches;
+const invText = (p) => (darkMode() ? p > 0.6 : p > 0.55);
+
+// ---------------------------------------------------------------- state
+const S = {
+  geo: null, state: null, forecast: null, metrics: null,
+  layer: "now", target: "active", horizon: 1, selected: null, view: "map",
+};
+
+// ---------------------------------------------------------------- map
+function buildMap() {
+  const svg = $("#map");
+  svg.setAttribute("viewBox", S.geo.viewBox);
+  svg.innerHTML = "";
+  const defs = el("defs", {}, svg);
+  const pat = el("pattern", { id: "hatch", width: 7, height: 7, patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)" }, defs);
+  el("rect", { width: 7, height: 7, fill: css("--calm") }, pat);
+  el("line", { x1: 0, y1: 0, x2: 0, y2: 7, stroke: css("--nodata"), "stroke-width": 3 }, pat);
+
+  const gReg = el("g", {}, svg);
+  for (const [, d] of Object.entries(S.geo.other || {})) el("path", { d, class: "nodata" }, gReg);
+  for (const [name, d] of Object.entries(S.geo.regions)) {
+    const known = S.forecast?.regions.some((r) => r.name === name) || S.state?.regions.some((r) => r.name === name);
+    const p = el("path", { d, class: known ? "reg" : "nodata", "data-id": slug(name) }, gReg);
+    if (known) { p.setAttribute("tabindex", "0"); p.setAttribute("role", "button"); }
+  }
+  const c = S.geo.kyiv_city;
+  el("circle", { cx: c.cx, cy: c.cy, r: c.r, class: "reg city", "data-id": "kyiv-city", tabindex: 0, role: "button" }, gReg);
+  el("g", { id: "labels" }, svg);
+  $("#attr").textContent = S.geo.attribution;
+
+  const tip = $("#tip");
+  svg.addEventListener("pointermove", (ev) => {
+    const t = ev.target.closest("[data-id]");
+    if (!t) { tip.hidden = true; return; }
+    const r = regionData(t.dataset.id);
+    if (!r) { tip.hidden = true; return; }
+    const box = $(".mapwrap").getBoundingClientRect();
+    tip.style.left = `${ev.clientX - box.left}px`;
+    tip.style.top = `${ev.clientY - box.top}px`;
+    tip.innerHTML = tipHTML(r);
+    tip.hidden = false;
+  });
+  svg.addEventListener("pointerleave", () => { tip.hidden = true; });
+  svg.addEventListener("click", (ev) => {
+    const t = ev.target.closest("[data-id]");
+    if (t && regionData(t.dataset.id)) select(t.dataset.id);
+  });
+  svg.addEventListener("keydown", (ev) => {
+    if ((ev.key === "Enter" || ev.key === " ") && ev.target.dataset?.id) { ev.preventDefault(); select(ev.target.dataset.id); }
+  });
+}
+
+function regionData(id) {
+  const st = S.state?.regions.find((r) => r.id === id);
+  const fc = S.forecast?.regions.find((r) => r.id === id);
+  if (!st && !fc) return null;
+  return { ...(fc || {}), ...(st || {}), probs: fc?.probs };
+}
+
+function tipHTML(r) {
+  if (S.layer === "now") {
+    const s = r.active ? `тривога ${r.since ? "вже " + duration(r.since) : ""}` : "тривоги немає";
+    return `<b>${esc(fullName(r))}</b><br>${s}`;
+  }
+  const p = r.probs?.[S.target]?.[S.horizon];
+  return `<b>${esc(fullName(r))}</b><br>${pct(p)} · ${S.target === "active" ? "тривога в годину" : "нова тривога"} ${S.horizon}`;
+}
+
+function paintMap() {
+  if (!S.geo) return;
+  const svg = $("#map");
+  const labels = $("#labels");
+  labels.innerHTML = "";
+  for (const node of svg.querySelectorAll(".reg")) {
+    const r = regionData(node.dataset.id);
+    node.classList.toggle("sel", node.dataset.id === S.selected);
+    let fill = css("--calm");
+    let label = null;
+    let p = null;
+    if (r && S.layer === "now") {
+      fill = r.active ? css("--alert") : css("--calm");
+    } else if (r && S.forecast) {
+      p = r.probs?.[S.target]?.[S.horizon];
+      fill = p == null ? css("--calm") : rampColor(p);
+      label = pct(p);
+    }
+    node.style.fill = fill;
+    node.setAttribute("aria-label", r ? `${fullName(r)}: ${S.layer === "now" ? (r.active ? "тривога" : "немає тривоги") : pct(p)}` : "");
+    const at = r && S.geo.labels[r.name];
+    if (label && at) {
+      const isCity = r.name === "Kyiv City";
+      const t = el("text", { x: at[0], y: at[1] + (isCity ? -18 : 6), "text-anchor": "middle", class: "lbl" + (!isCity && invText(p) ? " inv" : "") }, labels);
+      t.textContent = label;
+    }
+  }
+  // the city circle goes on top of the oblast
+  const city = svg.querySelector(".city");
+  if (city) city.parentNode.appendChild(city);
+  paintLegend();
+}
+
+function paintLegend() {
+  const lg = $("#legend");
+  if (S.layer === "now") {
+    lg.innerHTML = `<span><i class="sw" style="background:${css("--alert")}"></i>Тривога</span>
+      <span><i class="sw" style="background:${css("--calm")}"></i>Немає тривоги</span>
+      <span><i class="sw" style="background:repeating-linear-gradient(45deg,${css("--calm")} 0 3px,${css("--nodata")} 3px 6px)"></i>Немає даних (Крим, Луганщина)</span>`;
+  } else {
+    const stops = [0, 0.2, 0.4, 0.6, 0.8, 1].map((p) => `${rampColor(p)} ${p * 100}%`).join(",");
+    lg.innerHTML = `<span>0%</span><span class="bar" style="background:linear-gradient(90deg,${stops})"></span><span>100%</span>
+      <span class="muted">ймовірність ${S.target === "active" ? "тривоги в цю годину" : "початку нової тривоги"}</span>`;
+  }
+}
+
+// ---------------------------------------------------------------- controls
+function setupControls() {
+  const seg = (id, key, after) => {
+    $(id).addEventListener("click", (ev) => {
+      const b = ev.target.closest("button");
+      if (!b) return;
+      S[key] = key === "horizon" ? Number(b.dataset.v) : b.dataset.v;
+      for (const x of $(id).querySelectorAll("button")) x.setAttribute("aria-pressed", String(x === b));
+      after && after();
+      render();
+    });
+  };
+  seg("#layer", "layer", () => {
+    const f = S.layer === "forecast";
+    $("#target").hidden = !f;
+    $("#horizon").hidden = !f;
+  });
+  seg("#target", "target");
+  seg("#horizon", "horizon");
+}
+
+function renderHorizonButtons() {
+  const hs = S.forecast?.horizons || [1, 2, 3, 6];
+  const box = $("#horizon");
+  if (box.childElementCount === hs.length) return;
+  box.innerHTML = hs.map((h) => `<button data-v="${h}" aria-pressed="${h === S.horizon}">${h} год</button>`).join("");
+}
+
+function windowText() {
+  if (S.layer === "now") {
+    if (!S.state) return "";
+    return S.state.source === "alerts.in.ua"
+      ? `Живі дані alerts.in.ua, ${fmtTime.format(new Date(S.state.as_of))}`
+      : `Стан на кінець датасету: ${fmtFull.format(new Date(S.state.as_of))}`;
+  }
+  const w = S.forecast?.windows?.[S.horizon];
+  if (!w) return "";
+  const [a, b] = S.target === "active" ? w.active : w.onset;
+  return S.target === "active"
+    ? `Тривога в інтервалі ${fmtTime.format(new Date(a))}–${fmtTime.format(new Date(b))}`
+    : `Нова тривога між ${fmtTime.format(new Date(a))} і ${fmtTime.format(new Date(b))}`;
+}
+
+// ---------------------------------------------------------------- summary
+function renderSummary() {
+  const st = S.state, fc = S.forecast;
+  const tiles = [];
+  if (st) {
+    const n = st.regions.filter((r) => r.active).length;
+    tiles.push(`<div class="stat ${n ? "hot" : ""}"><div class="k">Під тривогою зараз</div>
+      <div class="v">${n} <small>з ${st.regions.length} областей</small></div>
+      <div class="s">${st.source === "alerts.in.ua" ? "alerts.in.ua, " + fmtTime.format(new Date(st.as_of)) : "за датасетом, " + fmtFull.format(new Date(st.as_of))}</div></div>`);
+  }
+  if (fc) {
+    const exp = fc.regions.reduce((s, r) => s + (r.probs.active[1] || 0), 0);
+    tiles.push(`<div class="stat"><div class="k">Очікується під тривогою в першу годину</div>
+      <div class="v">≈ ${exp.toFixed(1)} <small>областей</small></div><div class="s">сума ймовірностей по областях</div></div>`);
+    const h3 = fc.horizons.includes(3) ? 3 : fc.horizons[0];
+    const top = [...fc.regions].sort((a, b) => b.probs.onset[h3] - a.probs.onset[h3])[0];
+    if (top) {
+      tiles.push(`<div class="stat"><div class="k">Найімовірніша нова тривога за ${h3} год</div>
+        <div class="v">${pct(top.probs.onset[h3])} <small>${esc(top.name_uk)}</small></div>
+        <div class="s">прогноз станом на ${fmtFull.format(new Date(fc.origin))}</div></div>`);
+    }
+    tiles.push(`<div class="stat"><div class="k">Модель навчена</div>
+      <div class="v" style="font-size:18px">${fc.model?.trained_at ? fmtFull.format(new Date(fc.model.trained_at)) : "–"}</div>
+      <div class="s">історія до ${fmtFull.format(new Date(fc.history_end))}</div></div>`);
+  }
+  $("#summary").innerHTML = tiles.join("");
+}
+
+function renderBanner() {
+  const w = [...(S.forecast?.warnings || [])];
+  const b = $("#banner");
+  b.hidden = !w.length;
+  b.innerHTML = w.map((x) => `<p>${esc(x)}</p>`).join("");
+}
+
+// ---------------------------------------------------------------- ranking
+function renderRank() {
+  const fc = S.forecast;
+  const t = $("#rank");
+  if (!fc) { t.innerHTML = ""; return; }
+  const hs = fc.horizons;
+  const active = new Set((S.state?.regions || []).filter((r) => r.active).map((r) => r.id));
+  const key = S.layer === "now" ? (r) => (active.has(r.id) ? 2 : 0) + r.probs.active[1] : (r) => r.probs[S.target][S.horizon];
+  const rows = [...fc.regions].sort((a, b) => key(b) - key(a));
+  const cell = (p) => `<span class="cell" style="background:${rampColor(p)};color:${invText(p) ? "#fff" : "inherit"}">${pct(p)}</span>`;
+  t.innerHTML = `<thead><tr><th>Область</th>${hs.map((h) => `<th>Тривога в ${h}-у год</th>`).join("")}${hs.map((h) => `<th>Нова за ${h} год</th>`).join("")}</tr></thead>
+    <tbody>${rows.map((r) => `<tr data-id="${r.id}" tabindex="0" class="${r.id === S.selected ? "sel" : ""}">
+      <td>${esc(r.name_uk)}${active.has(r.id) ? '<span class="badge">тривога</span>' : ""}</td>
+      ${hs.map((h) => `<td>${cell(r.probs.active[h])}</td>`).join("")}
+      ${hs.map((h) => `<td>${cell(r.probs.onset[h])}</td>`).join("")}</tr>`).join("")}</tbody>`;
+  $("#rank-sub").textContent = `прогноз станом на ${fmtFull.format(new Date(fc.origin))} за Києвом`;
+}
+
+// ---------------------------------------------------------------- detail
+async function select(id) {
+  S.selected = id;
+  if (location.hash !== `#region/${id}`) history.replaceState(null, "", `#region/${id}`);
+  paintMap();
+  renderRank();
+  const box = $("#detail");
+  try {
+    const d = await getJSON(`/api/regions/${encodeURIComponent(id)}`);
+    if (S.selected === id) renderDetail(d);
+  } catch (e) {
+    box.innerHTML = `<p class="muted">Не вдалося завантажити дані області.</p>`;
+  }
+  if (window.matchMedia("(max-width: 900px)").matches) box.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function renderDetail(d) {
+  const st = S.state?.regions.find((r) => r.id === d.id);
+  const hs = Object.keys(d.probs.active).map(Number);
+  const status = st?.active
+    ? `<span class="status on"><span class="b"></span>Тривога${st.since ? ` з ${fmtTime.format(new Date(st.since))}, ${duration(st.since, S.state.source === "alerts.in.ua" ? new Date() : new Date(S.state.as_of))}` : ""}</span>`
+    : `<span class="status off"><span class="b"></span>Тривоги немає</span>`;
+  const locs = st?.locations?.length ? `<p class="small muted">Під тривогою: ${st.locations.map(esc).join(", ")}</p>` : "";
+  const bar = (p) => `<div class="pbar"><div class="track"><div class="fill" style="width:${Math.round(p * 100)}%;background:${rampColor(Math.max(p, 0.15))}"></div></div><span class="num">${pct(p)}</span></div>`;
+  const w = d.windows;
+  const rows = hs.map((h) => `<tr><td class="h">${h} год<br><span class="small">${fmtTime.format(new Date(w[h].active[0]))}–${fmtTime.format(new Date(w[h].active[1]))}</span></td>
+      <td>${bar(d.probs.active[h])}</td><td>${bar(d.probs.onset[h])}</td></tr>`).join("");
+  const reg = S.metrics?.holdout?.by_region?.find((x) => x.region === d.name && x.target === "active" && x.horizon === 1);
+  $("#detail").innerHTML = `
+    <h2>${esc(fullName(d))}</h2>${status}${locs}
+    <p class="small muted">${S.state?.source === "alerts.in.ua" ? "Стан за alerts.in.ua" : "Стан на кінець датасету"}; прогноз станом на ${d.origin_kyiv} за Києвом.</p>
+    <h3>Прогноз</h3>
+    <table class="probs"><thead><tr><th></th><th>Тривога в цю годину</th><th>Нова тривога за цей час</th></tr></thead><tbody>${rows}</tbody></table>
+    <h3>Останні 72 години і прогноз</h3>
+    <div id="ch-hist"></div>
+    <div class="chart-legend"><span><i style="background:${css("--alert")}"></i>частка години під тривогою</span><span><i style="background:${rampColor(0.5)}"></i>прогноз: ймовірність тривоги</span></div>
+    <h3>Типова доба (останні 28 днів)</h3>
+    <div id="ch-prof"></div>
+    <p class="small muted">Частка днів, коли в цю годину за Києвом була тривога. Поточна година виділена.</p>
+    ${d.holdout?.active_h1 ? `<h3>Як модель вгадувала минулого тижня</h3><div id="ch-ho"></div>
+    <div class="chart-legend"><span><i style="background:${css("--alert-soft")};border:1px solid ${css("--alert")}"></i>тривога була</span><span><i style="background:${css("--accent")}"></i>прогноз на наступну годину</span></div>
+    ${reg ? `<p class="small muted">Для цієї області: ROC AUC ${num(reg.roc_auc, 2)}, Brier ${num(reg.brier, 3)}, покращення відносно кліматології ${signedPct(reg.bss_vs_clim)}.</p>` : ""}` : ""}`;
+  histChart($("#ch-hist"), d);
+  profileChart($("#ch-prof"), d.hour_profile_28d);
+  if (d.holdout?.active_h1) holdoutChart($("#ch-ho"), d.holdout.active_h1);
+}
+
+const signedPct = (v) => (v == null ? "–" : `${v > 0 ? "+" : ""}${Math.round(v * 100)}%`);
+
+// ---------------------------------------------------------------- charts
+function axisTicks(svg, x0, y0, W, n, at, label) {
+  for (let i = 0; i < n; i++) {
+    const lab = label(i);
+    if (lab == null) continue;
+    const x = at(i);
+    el("line", { x1: x, x2: x, y1: y0, y2: y0 + 4, class: "ax" }, svg);
+    const t = el("text", { x, y: y0 + 15, "text-anchor": "middle" }, svg);
+    t.textContent = lab;
+  }
+}
+
+function histChart(box, d) {
+  const hist = d.history.hourly;
+  const start = new Date(d.history.start);
+  const hs = Object.keys(d.probs.active).map(Number);
+  const nF = Math.max(...hs);
+  const n = hist.length + nF;
+  const W = 360, Hh = 120, pad = { l: 26, r: 4, t: 8, b: 20 };
+  const svg = el("svg", { viewBox: `0 0 ${W} ${Hh}`, class: "chart" });
+  const bw = (W - pad.l - pad.r) / n;
+  const y = (v) => pad.t + (1 - v) * (Hh - pad.t - pad.b);
+  for (const v of [0, 0.5, 1]) {
+    el("line", { x1: pad.l, x2: W - pad.r, y1: y(v), y2: y(v), class: "ax", "stroke-dasharray": v ? "2 3" : "" }, svg);
+    const t = el("text", { x: pad.l - 4, y: y(v) + 3, "text-anchor": "end" }, svg);
+    t.textContent = `${v * 100}%`;
+  }
+  hist.forEach((v, i) => {
+    if (v > 0) el("rect", { x: pad.l + i * bw, y: y(v), width: Math.max(bw - 0.6, 0.6), height: y(0) - y(v), fill: css("--alert"), opacity: 0.85 }, svg);
+  });
+  for (const h of hs) {
+    const p = d.probs.active[h];
+    const i = hist.length + h - 1;
+    el("rect", { x: pad.l + i * bw, y: y(p), width: Math.max(bw - 0.6, 0.6), height: y(0) - y(p), fill: rampColor(Math.max(0.35, p)) }, svg);
+  }
+  const xNow = pad.l + hist.length * bw;
+  el("line", { x1: xNow, x2: xNow, y1: pad.t - 4, y2: y(0), stroke: css("--ink2"), "stroke-dasharray": "3 2" }, svg);
+  const tn = el("text", { x: xNow + 3, y: pad.t + 2 }, svg);
+  tn.textContent = "прогноз";
+  axisTicks(svg, pad.l, y(0), W, n, (i) => pad.l + i * bw, (i) => {
+    const t = new Date(start.getTime() + i * 3600e3);
+    return kyivHour(t) === 0 && i < hist.length ? fmtDay.format(t) : null;
+  });
+  box.appendChild(svg);
+}
+
+function profileChart(box, prof) {
+  const W = 360, Hh = 100, pad = { l: 26, r: 4, t: 6, b: 20 };
+  const svg = el("svg", { viewBox: `0 0 ${W} ${Hh}`, class: "chart" });
+  const bw = (W - pad.l - pad.r) / 24;
+  const y = (v) => pad.t + (1 - v) * (Hh - pad.t - pad.b);
+  const nowH = kyivHour(new Date());
+  for (const v of [0, 0.5, 1]) {
+    el("line", { x1: pad.l, x2: W - pad.r, y1: y(v), y2: y(v), class: "ax", "stroke-dasharray": v ? "2 3" : "" }, svg);
+    const t = el("text", { x: pad.l - 4, y: y(v) + 3, "text-anchor": "end" }, svg);
+    t.textContent = `${v * 100}%`;
+  }
+  prof.forEach((v, i) => {
+    el("rect", { x: pad.l + i * bw + 1, y: y(v), width: bw - 2, height: Math.max(0, y(0) - y(v)), rx: 1.5,
+      fill: i === nowH ? css("--ink") : rampColor(Math.max(0.2, v)) }, svg);
+  });
+  axisTicks(svg, pad.l, y(0), W, 24, (i) => pad.l + i * bw + bw / 2, (i) => (i % 3 === 0 ? `${i}` : null));
+  box.appendChild(svg);
+}
+
+function holdoutChart(box, ho) {
+  const n = ho.p.length;
+  const start = new Date(ho.start);
+  const W = 360, Hh = 110, pad = { l: 26, r: 4, t: 6, b: 20 };
+  const svg = el("svg", { viewBox: `0 0 ${W} ${Hh}`, class: "chart" });
+  const bw = (W - pad.l - pad.r) / n;
+  const y = (v) => pad.t + (1 - v) * (Hh - pad.t - pad.b);
+  ho.y.forEach((v, i) => {
+    if (v) el("rect", { x: pad.l + i * bw, y: y(1), width: bw + 0.3, height: y(0) - y(1), fill: css("--alert-soft") }, svg);
+  });
+  for (const v of [0, 0.5, 1]) {
+    el("line", { x1: pad.l, x2: W - pad.r, y1: y(v), y2: y(v), class: "ax", "stroke-dasharray": v ? "2 3" : "" }, svg);
+    const t = el("text", { x: pad.l - 4, y: y(v) + 3, "text-anchor": "end" }, svg);
+    t.textContent = `${v * 100}%`;
+  }
+  const pts = ho.p.map((p, i) => `${(pad.l + (i + 0.5) * bw).toFixed(1)},${y(p).toFixed(1)}`).join(" ");
+  el("polyline", { points: pts, fill: "none", stroke: css("--accent"), "stroke-width": 1.3, "stroke-linejoin": "round" }, svg);
+  axisTicks(svg, pad.l, y(0), W, n, (i) => pad.l + i * bw, (i) => {
+    const t = new Date(start.getTime() + i * 3600e3);
+    return kyivHour(t) === 0 ? fmtDay.format(t) : null;
+  });
+  box.appendChild(svg);
+}
+
+function lineChart(series, { W = 420, Hh = 200, xs, yMin, yMax, yFmt = (v) => v, xFmt = (v) => v, diag = false, xLabel = "", yLabel = "" }) {
+  const pad = { l: 42, r: 10, t: 10, b: 34 };
+  const svg = el("svg", { viewBox: `0 0 ${W} ${Hh}`, class: "chart" });
+  const xMin = Math.min(...xs), xMax = Math.max(...xs);
+  const x = (v) => pad.l + ((v - xMin) / (xMax - xMin || 1)) * (W - pad.l - pad.r);
+  const y = (v) => pad.t + (1 - (v - yMin) / (yMax - yMin || 1)) * (Hh - pad.t - pad.b);
+  const step = [0.05, 0.1, 0.2, 0.25, 0.5, 1].find((st) => (yMax - yMin) / st <= 6) || 1;
+  for (let v = Math.ceil(yMin / step - 1e-9) * step; v <= yMax + 1e-9; v += step) {
+    el("line", { x1: pad.l, x2: W - pad.r, y1: y(v), y2: y(v), class: "ax" }, svg);
+    const t = el("text", { x: pad.l - 5, y: y(v) + 3, "text-anchor": "end" }, svg);
+    t.textContent = yFmt(v);
+  }
+  for (const v of xs) {
+    const t = el("text", { x: x(v), y: Hh - pad.b + 14, "text-anchor": "middle" }, svg);
+    t.textContent = xFmt(v);
+  }
+  if (xLabel) { const t = el("text", { x: (W + pad.l) / 2, y: Hh - 4, "text-anchor": "middle" }, svg); t.textContent = xLabel; }
+  if (yLabel) { const t = el("text", { x: 10, y: Hh / 2, "text-anchor": "middle", transform: `rotate(-90 10 ${Hh / 2})` }, svg); t.textContent = yLabel; }
+  if (yMin < 0 && yMax > 0) el("line", { x1: pad.l, x2: W - pad.r, y1: y(0), y2: y(0), stroke: css("--ink3") }, svg);
+  if (diag) el("line", { x1: x(xMin), y1: y(yMin), x2: x(xMax), y2: y(yMax), stroke: css("--ink3"), "stroke-dasharray": "4 3" }, svg);
+  for (const s of series) {
+    const pts = s.points.filter((p) => p[1] != null);
+    el("polyline", { points: pts.map((p) => `${x(p[0])},${y(p[1])}`).join(" "), fill: "none", stroke: s.color, "stroke-width": 2, "stroke-dasharray": s.dash || "" }, svg);
+    for (const p of pts) el("circle", { cx: x(p[0]), cy: y(p[1]), r: 3, fill: s.color }, svg);
+  }
+  return svg;
+}
+
+// ---------------------------------------------------------------- metrics view
+const MODEL_UK = {
+  lightgbm: "LightGBM (наша модель)", climatology_28d: "Кліматологія 28 днів", persistence: "Персистентність",
+  markov_persistence: "Марковська персистентність", logistic_regression: "Логістична регресія", lightgbm_no_spatial: "LightGBM без сусідів",
+};
+const TARGET_UK = { active: "Тривога в годину N", onset: "Нова тривога протягом N год" };
+
+async function renderMetrics() {
+  const box = $("#metrics");
+  if (!S.metrics) {
+    try { S.metrics = await getJSON("/api/metrics"); } catch (e) { box.innerHTML = `<p class="muted">Метрики ще не готові.</p>`; return; }
+  }
+  const m = S.metrics, ho = m.holdout;
+  if (!ho) { box.innerHTML = `<p class="muted">Метрики ще не готові.</p>`; return; }
+  const sc = ho.scores;
+  const get = (t, h, model) => sc.find((r) => r.target === t && r.horizon === h && r.model === model);
+  const hs = [...new Set(sc.map((r) => r.horizon))].sort((a, b) => a - b);
+  const tile = (t, h) => {
+    const r = get(t, h, "lightgbm");
+    if (!r) return "";
+    return `<div class="stat"><div class="k">${TARGET_UK[t].replace("N", h)}</div>
+      <div class="v ${r.bss_vs_clim > 0 ? "pos" : "neg"}">${signedPct(r.bss_vs_clim)}</div>
+      <div class="s">Brier skill відносно кліматології · AUC ${num(r.roc_auc, 2)}</div></div>`;
+  };
+  const table = (t) => {
+    const models = [...new Set(sc.filter((r) => r.target === t).map((r) => r.model))];
+    const row = (model, metric, d, fmt = (v) => num(v, d)) =>
+      `<tr class="${model === "lightgbm" ? "best" : ""}"><td>${MODEL_UK[model] || model}</td>${hs.map((h) => `<td>${fmt(get(t, h, model)?.[metric])}</td>`).join("")}</tr>`;
+    return `<div class="card"><div class="card-h"><h2>${TARGET_UK[t]}</h2><span class="small muted">частота події: ${hs.map((h) => `${h} год ${pct(get(t, h, "lightgbm")?.base_rate)}`).join(", ")}</span></div>
+      <div class="tablewrap"><table class="mt"><thead><tr><th>Brier score (менше краще)</th>${hs.map((h) => `<th>${h} год</th>`).join("")}</tr></thead>
+      <tbody>${models.map((mm) => row(mm, "brier", 4)).join("")}</tbody></table>
+      <table class="mt" style="margin-top:12px"><thead><tr><th>ROC AUC (більше краще)</th>${hs.map((h) => `<th>${h} год</th>`).join("")}</tr></thead>
+      <tbody>${models.map((mm) => row(mm, "roc_auc", 3)).join("")}</tbody></table></div></div>`;
+  };
+
+  const planList = Object.entries(ho.plans || {});
+  const same = planList.every(([, p]) => p.months === planList[0]?.[1].months && p.trees === planList[0]?.[1].trees);
+  const plans = same && planList.length
+    ? `${planList[0][1].months} міс. історії, ${planList[0][1].trees} дерев для кожної моделі`
+    : planList.map(([k, p]) => `${k.replace("active_h", "тривога ").replace("onset_h", "нова ")} год: ${p.months} міс., ${p.trees} дерев`).join("; ");
+  let html = `<h2 style="margin-top:0">Якість моделі</h2>
+    <p class="lead">Перед навчанням моделі, що зараз працює, останні ${ho.days} днів (${fmtFull.format(new Date(ho.start))} – ${fmtFull.format(new Date(ho.end))})
+      були відкладені. Модель навчилась на даних до них і прогнозувала кожну годину для кожної області так, ніби це відбувалося наживо.
+      Нижче її результат поруч із двома простими орієнтирами.</p>
+    <div class="summary">${tile("active", 1)}${tile("onset", 1)}${tile("onset", 3)}${tile("onset", 6)}</div>
+    ${table("active")}${table("onset")}`;
+
+  html += `<div class="two"><div class="card"><div class="card-h"><h2>Перевага над кліматологією за горизонтом</h2></div><div id="ch-bss"></div>
+      <div class="chart-legend"><span><i style="background:${css("--alert")}"></i>тривога в годину N</span><span><i style="background:${css("--accent")}"></i>нова тривога за N год</span></div>
+      <p class="small muted">Brier skill score: 0% означає «не краще за кліматологію», 100% означає ідеальний прогноз.</p></div>
+    <div class="card"><div class="card-h"><h2>Калібрування</h2></div><div id="ch-rel"></div>
+      <div class="chart-legend"><span><i style="background:${css("--alert")}"></i>тривога в 1-у годину</span><span><i style="background:${css("--accent")}"></i>нова тривога за 3 год</span></div>
+      <p class="small muted">Якщо модель каже 30%, подія має траплятися приблизно в 30% випадків. Ідеал: пунктирна діагональ.</p></div></div>`;
+
+  if (ho.by_region) {
+    const rows = ho.by_region.filter((r) => r.target === "onset" && r.horizon === 3).sort((a, b) => (b.roc_auc ?? 0) - (a.roc_auc ?? 0));
+    html += `<div class="card"><div class="card-h"><h2>За областями: нова тривога за 3 год</h2><span class="small muted">відкладений тиждень</span></div>
+      <div class="tablewrap"><table class="mt"><thead><tr><th>Область</th><th>Частота події</th><th>Brier</th><th>Перевага над кліматологією</th><th>ROC AUC</th></tr></thead><tbody>
+      ${rows.map((r) => `<tr><td>${esc(r.name_uk)}</td><td>${pct(r.base_rate)}</td><td>${num(r.brier, 3)}</td><td class="${r.bss_vs_clim > 0 ? "pos" : "neg"}">${r.base_rate < 0.02 ? "–" : signedPct(r.bss_vs_clim)}</td><td>${num(r.roc_auc, 2)}</td></tr>`).join("")}
+      </tbody></table></div></div>`;
+  }
+
+  if (m.walk_forward?.scores?.length) {
+    const wf = m.walk_forward.scores;
+    const whs = [...new Set(wf.map((r) => r.horizon_h))].sort((a, b) => a - b);
+    const block = (t) => {
+      const models = [...new Set(wf.filter((r) => r.target === t).map((r) => r.model))];
+      return `<table class="mt" style="margin-top:8px"><thead><tr><th>${TARGET_UK[t]}: перевага над кліматологією</th>${whs.map((h) => `<th>${h} год</th>`).join("")}</tr></thead><tbody>
+        ${models.map((mm) => `<tr class="${mm === "lightgbm" ? "best" : ""}"><td>${MODEL_UK[mm] || mm}</td>${whs.map((h) => {
+          const v = wf.find((r) => r.target === t && r.model === mm && r.horizon_h === h)?.bss_vs_clim;
+          return `<td class="${v > 0 ? "pos" : "neg"}">${signedPct(v)}</td>`;
+        }).join("")}</tr>`).join("")}</tbody></table>`;
+    };
+    const per = m.walk_forward.test ? `${fmtFull.format(new Date(m.walk_forward.test[0]))} – ${fmtFull.format(new Date(m.walk_forward.test[1]))}` : "";
+    html += `<div class="card"><div class="card-h"><h2>Повна оцінка: walk-forward, 4 тижні</h2><span class="small muted">${per}</span></div>
+      <p class="small muted">Результат дослідницького скрипта run.py: щотижневе перенавчання, більше орієнтирів, вибір вікна навчання на окремому місяці валідації.</p>
+      <div class="tablewrap">${[...new Set(wf.map((r) => r.target))].map(block).join("")}</div></div>`;
+  }
+  html += `<p class="small muted">Модель навчена ${ho.trained_at ? fmtFull.format(new Date(ho.trained_at)) : "–"}. Вікна навчання (${ho.selection_source === "defaults" ? "типові" : "вибрані на валідації в run.py"}): ${esc(plans)}.</p>`;
+  box.innerHTML = html;
+
+  const xs = hs;
+  const series = ["active", "onset"].map((t, i) => ({
+    color: i ? css("--accent") : css("--alert"),
+    points: hs.map((h) => [h, get(t, h, "lightgbm")?.bss_vs_clim]),
+  }));
+  const allV = series.flatMap((s) => s.points.map((p) => p[1])).filter((v) => v != null);
+  $("#ch-bss").appendChild(lineChart(series, {
+    xs, yMin: Math.min(0, Math.floor(Math.min(...allV) * 10) / 10), yMax: Math.max(0.1, Math.ceil(Math.max(...allV) * 10) / 10),
+    yFmt: (v) => `${Math.round(v * 100)}%`, xFmt: (v) => `${v} год`, xLabel: "горизонт прогнозу",
+  }));
+  const rel = ho.reliability || {};
+  const relSeries = [["active_h1", css("--alert")], ["onset_h3", css("--accent")]]
+    .filter(([k]) => rel[k]).map(([k, color]) => ({ color, points: rel[k].map((r) => [r[0], r[1]]) }));
+  $("#ch-rel").appendChild(lineChart(relSeries, {
+    xs: [0, 0.2, 0.4, 0.6, 0.8, 1], yMin: 0, yMax: 1, diag: true,
+    yFmt: (v) => `${Math.round(v * 100)}%`, xFmt: (v) => `${Math.round(v * 100)}%`, xLabel: "прогнозована ймовірність", yLabel: "фактична частота",
+  }));
+}
+
+// ---------------------------------------------------------------- views & loading
+function setView() {
+  const h = location.hash.replace("#", "") || "map";
+  const [view, arg] = h.split("/");
+  S.view = view === "region" ? "map" : (["map", "metrics", "about"].includes(view) ? view : "map");
+  for (const a of document.querySelectorAll(".tabs a")) a.setAttribute("aria-current", a.dataset.view === S.view ? "page" : "false");
+  for (const v of ["map", "metrics", "about"]) $(`#view-${v}`).hidden = v !== S.view || (v !== "about" && !$("#loading").hidden);
+  if (S.view === "metrics" && $("#loading").hidden) renderMetrics();
+  if (view === "region" && arg && arg !== S.selected && S.forecast) select(arg);
+}
+
+function render() {
+  renderHorizonButtons();
+  $("#window").textContent = windowText();
+  renderSummary();
+  renderBanner();
+  paintMap();
+  renderRank();
+  $("#foot-status").textContent = S.state ? `Оновлено о ${fmtTime.format(new Date())}` : "";
+}
+
+async function refresh() {
+  try {
+    const [st, fc] = await Promise.all([getJSON("/api/state"), getJSON("/api/forecast")]);
+    const firstLoad = !S.forecast;
+    S.state = st; S.forecast = fc;
+    $("#loading").hidden = true;
+    if (firstLoad) { buildMap(); setView(); }
+    render();
+    if (S.selected && !firstLoad) {
+      const d = await getJSON(`/api/regions/${S.selected}`).catch(() => null);
+      if (d) renderDetail(d);
+    }
+    return true;
+  } catch (e) {
+    if (e.status === 503) {
+      $("#loading").hidden = false;
+      $("#loading-msg").textContent = e.body?.detail?.message || "Підготовка";
+      for (const v of ["map", "metrics"]) $(`#view-${v}`).hidden = true;
+      return false;
+    }
+    console.error(e);
+    return !!S.forecast;
+  }
+}
+
+async function main() {
+  readRamp();
+  setupControls();
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { readRamp(); if (S.geo) { buildMap(); render(); } });
+  window.addEventListener("hashchange", setView);
+  $("#rank").addEventListener("click", (ev) => { const tr = ev.target.closest("tr[data-id]"); if (tr) select(tr.dataset.id); });
+  $("#rank").addEventListener("keydown", (ev) => { const tr = ev.target.closest("tr[data-id]"); if (tr && ev.key === "Enter") select(tr.dataset.id); });
+  S.geo = await getJSON("/static/ukraine-map.json");
+  setView();
+  let ok = await refresh();
+  while (!ok) {
+    await new Promise((r) => setTimeout(r, 5000));
+    ok = await refresh();
+  }
+  const first = location.hash.match(/^#region\/(.+)$/);
+  if (first) select(first[1]);
+  setInterval(async () => {
+    const prevOrigin = S.forecast?.origin;
+    await refresh();
+    if (S.forecast?.origin !== prevOrigin) { S.metrics = null; if (S.view === "metrics") renderMetrics(); }
+  }, 60000);
+  getJSON("/api/metrics").then((m) => { S.metrics = m; }).catch(() => {});
+}
+
+main();
