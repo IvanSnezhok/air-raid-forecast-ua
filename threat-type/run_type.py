@@ -173,6 +173,23 @@ def badk_check(lab: pd.DataFrame, path: Path) -> dict:
     }
 
 
+def plot_months(month: pd.DataFrame):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    colors = {"drone": "#e3b505", "massed_drone": "#e07a1f", "kab": "#8c564b", "missile": "#d62728",
+              "ballistic": "#7b1fa2", "unknown": "#c7c7c7"}
+    cols = [c for c in TYPES + ["unknown"] if c in month]
+    ax = month[cols].plot.bar(stacked=True, figsize=(11, 4.5), color=[colors[c] for c in cols], width=0.85)
+    ax.set_xlabel("")
+    ax.set_ylabel("alert onsets")
+    ax.set_title("Alert onsets by threat type (labels from Air Force posts)")
+    ax.legend(ncol=6, fontsize=8, loc="upper left")
+    plt.tight_layout()
+    plt.savefig(OUT / "types_by_month.png", dpi=120)
+    plt.close()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--posts", required=True)
@@ -196,6 +213,7 @@ def main():
         stats["badk_check"] = badk_check(lab, Path(a.badk))
     month = lab.assign(m=lab["start"].dt.strftime("%Y-%m")).pivot_table(index="m", columns="type", values="region", aggfunc="count", fill_value=0)
     month.to_csv(OUT / "types_by_month.csv")
+    plot_months(month)
     log(json.dumps(stats, ensure_ascii=False))
 
     known = lab[lab["type"] != "unknown"].reset_index(drop=True)
@@ -244,8 +262,8 @@ def main():
     res = pd.DataFrame(results)
     res.to_csv(OUT / "metrics_test.csv", index=False)
     q = P[P["horizon"] == 1]
-    cm = pd.crosstab(q["type"], q[[f"lightgbm__{c}" for c in TYPES]].to_numpy().argmax(1), rownames=["true"], colnames=["pred"])
-    cm.columns = [TYPES[i] for i in cm.columns]
+    pred = pd.Categorical([TYPES[i] for i in q[[f"lightgbm__{c}" for c in TYPES]].to_numpy().argmax(1)], categories=TYPES)
+    cm = pd.crosstab(pd.Categorical(q["type"], categories=TYPES), pred, rownames=["true"], colnames=["pred"], dropna=False)
     cm.to_csv(OUT / "confusion_h1.csv")
     stats["split"] = {"val": [str(val_start), str(test_start)], "test": [str(test_start), str(end)]}
     (OUT / "run.json").write_text(json.dumps(stats, indent=2, ensure_ascii=False, default=str))

@@ -123,6 +123,7 @@ def main() -> int:
     ap.add_argument("--channels", default="kpszsu")
     ap.add_argument("--out", default="data")
     ap.add_argument("--max-minutes", type=float, default=150)
+    ap.add_argument("--existing", default=None, help="earlier tg_<channel>.parquet dir: only fetch newer posts")
     a = ap.parse_args()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -136,11 +137,18 @@ def main() -> int:
 
     since = pd.Timestamp(a.since, tz="UTC")
     for ch in a.channels.split(","):
+        old_path = Path(a.existing or "-") / f"tg_{ch}.parquet"
+        old = pd.read_parquet(old_path) if old_path.exists() else None
+        # re-read the last 2 days of an existing history to pick up edits
+        start = since if old is None else max(since, old["date"].max() - pd.Timedelta(days=2))
         try:
-            df = scrape_channel(ch, since, a.max_minutes)
+            df = scrape_channel(ch, start, a.max_minutes)
         except Exception as e:
             report[f"{ch}_error"] = repr(e)
             continue
+        if old is not None:
+            df = pd.concat([old, df], ignore_index=True).drop_duplicates("id", keep="last").sort_values("id")
+            df = df[df["date"] >= since].reset_index(drop=True)
         df.to_parquet(out / f"tg_{ch}.parquet", index=False)
         report[ch] = {"posts": len(df), "first": str(df["date"].min()), "last": str(df["date"].max())}
         print(json.dumps(report[ch]), flush=True)

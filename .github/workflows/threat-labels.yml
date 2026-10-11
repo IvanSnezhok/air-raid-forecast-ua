@@ -11,7 +11,7 @@ on:
         description: "Fetch Telegram history back to this date (UTC)"
         default: "2025-01-01"
   schedule:
-    # Daily refresh of the labels (new posts since the last run are re-fetched).
+    # Daily refresh: only posts newer than the stored history (plus 2 days for edits).
     - cron: "40 6 * * *"
   push:
     branches: ["claude/project-thread-dcbt28"]
@@ -34,12 +34,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install pandas pyarrow beautifulsoup4
-      - name: Fetch
-        run: python threat-type/fetch_sources.py --since "${{ inputs.since || '2025-01-01' }}" --out out
-      - name: Commit to threat-labels-data
+      - name: Check out data branch
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898729+github-actions[bot]@users.noreply.github.com"
           git fetch origin threat-labels-data || true
           if git rev-parse --verify -q origin/threat-labels-data; then
             git worktree add data-branch origin/threat-labels-data
@@ -47,6 +43,12 @@ jobs:
           else
             git worktree add --orphan -b threat-labels-data data-branch
           fi
+      - name: Fetch
+        run: python threat-type/fetch_sources.py --since "${{ inputs.since || '2025-01-01' }}" --existing data-branch --out out
+      - name: Commit to threat-labels-data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898729+github-actions[bot]@users.noreply.github.com"
           cp out/* data-branch/
           cd data-branch
           git add -A
