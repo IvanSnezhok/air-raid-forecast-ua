@@ -31,7 +31,12 @@ function el(tag, attrs = {}, parent) {
   return e;
 }
 
+// Static build (GitHub Pages): no server, /api/x?q is served from precomputed api/x.json.
+const STATIC_SITE = !!document.querySelector('meta[name="airraid-static"]');
+const apiUrl = (url) => (STATIC_SITE && url.startsWith("/api/") ? `${url.slice(1).split("?")[0]}.json` : url);
+
 async function getJSON(url) {
+  url = apiUrl(url);
   const r = await fetch(url, { cache: "no-store" });
   if (!r.ok) {
     const err = new Error(`${url}: ${r.status}`);
@@ -779,7 +784,7 @@ async function main() {
     const r = S.forecast?.regions.find((x) => x.name_uk.toLowerCase() === q) || S.forecast?.regions.find((x) => x.name_uk.toLowerCase().startsWith(q));
     if (r) { select(r.id); ev.target.value = ""; ev.target.blur(); }
   });
-  S.geo = await getJSON("/static/ukraine-map.json");
+  S.geo = await getJSON("static/ukraine-map.json");
   setView();
   let ok = await refresh();
   while (!ok) {
