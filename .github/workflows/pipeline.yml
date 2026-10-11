@@ -1,0 +1,196 @@
+# The 10-minute pipeline. One run, in order:
+#   check out the store (live-data branch, last 10 days) -> poll alerts.in.ua ->
+#   forecast with the served models (predict_now.py; trains once only if none are
+#   compatible) -> threat-type forecast (needs the main forecast) -> verify past
+#   forecasts -> build the static site from the same models, forecast and
+#   verification -> status.json -> commit the new store partitions -> deploy to
+#   GitHub Pages (main only) -> keep-alive.
+# Training is the train job's business (train.yml); the models come from its cache.
+# Logic lives in scripts/ and .github/scripts/; see README "Automation".
+#
+# Triggers (layered, because GitHub's schedule is best effort):
+#   * schedule every 10 minutes at :03, :13, ... (runs only from the default branch);
+#   * keep-alive: after a run, if nothing has started a newer run by the next slot
+#     + 3 min, the run dispatches the next one itself (bounded chain; repository
+#     variable PIPELINE_KEEPALIVE=off disables it, PIPELINE_KEEPALIVE_MAX_HOPS
+#     caps the chain, default 72 = about 12 h);
+#   * workflow_dispatch: by hand (always runs) or by an external pinger with
+#     source=pinger (README: cron-job.org), the most reliable option.
+# A scheduled / keep-alive / pinger run that comes less than 5 minutes after the
+# previous update is skipped by the gate job, so overlapping triggers cost ~10 s.
+#
+# Secrets: ALERTS_IN_UA_TOKEN (without it the forecast is made as of the end of the
+# volunteer dataset). Settings -> Pages -> Source: GitHub Actions.
+name: pipeline
+
+on:
+  schedule:
+    - cron: "3-59/10 * * * *"
+  # TEMPORARY: test runs from the feature branch (schedules only run from main); removed before merge
+  push:
+    branches: [claude/dazzling-darwin-jlnlqj-automation]
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "manual (always runs), pinger or keepalive (skipped right after another update)"
+        default: manual
+      hop:
+        description: "keep-alive chain length (set by the keep-alive)"
+        default: "0"
+
+# One run at a time; a newer trigger waits (at most one pending), never cancels a run
+# that is writing the store.
+concurrency:
+  group: pipeline-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PYTHONPATH: src
+  STORE: live-data
+  AIRRAID_STORE: live-data
+  AIRRAID_MODEL_DIR: var/models
+  AIRRAID_DOWNLOAD: "0"  # the dataset is downloaded once per run, by its own step
+  SOURCE: ${{ inputs.source || github.event_name }}
+  HOP: ${{ inputs.hop || '0' }}
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      go: ${{ steps.gate.outputs.go }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/pipeline.py
+          sparse-checkout-cone-mode: false
+      - id: gate
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/pipeline.py gate
+
+  run:
+    needs: gate
+    if: needs.gate.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write  # commit the store to live-data
+      actions: write   # dispatch train.yml when the models are stale
+    env:
+      HAS_TOKEN: ${{ secrets.ALERTS_IN_UA_TOKEN != '' }}
+    steps:
+      - run: echo "JOB_T0=$(date +%s)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: .github/pipeline-requirements.txt
+      - run: pip install -q -r .github/pipeline-requirements.txt
+      - name: Model cache key
+        id: key
+        run: echo "prefix=$(python3 scripts/pipeline.py models-key)" >> "$GITHUB_OUTPUT"
+      - name: Restore the served models (published by train.yml)
+        id: models
+        uses: actions/cache/restore@v4
+        with:
+          path: var/models
+          key: ${{ steps.key.outputs.prefix }}-${{ github.run_id }}
+          restore-keys: ${{ steps.key.outputs.prefix }}-
+      - name: Check out the store (last 10 days)
+        id: store
+        run: STORE_DAYS=10 python3 scripts/pipeline.py timed checkout_store -- bash .github/scripts/live-data.sh checkout
+      - name: Download the volunteer dataset
+        run: >-
+          python3 scripts/pipeline.py timed dataset -- bash -c
+          'for i in 1 2 3; do python -c "from airraid.data import download; download()" && exit 0; sleep 10; done; exit 1'
+      - name: Poll alerts.in.ua
+        if: env.HAS_TOKEN == 'true'
+        continue-on-error: true  # the forecast then uses the last stored poll (up to 1 h old)
+        env:
+          ALERTS_IN_UA_TOKEN: ${{ secrets.ALERTS_IN_UA_TOKEN }}
+        run: python3 scripts/pipeline.py timed poll -- python -m airraid.collect poll --root "$STORE"
+      # [hook: PR 3, text signals] runs only once src/airraid/text/collect.py exists
+      - name: "[optional] Text signals: update the text-data archive"
+        if: hashFiles('src/airraid/text/collect.py') != ''
+        continue-on-error: true
+        run: python3 scripts/pipeline.py timed text_collect -- bash .github/scripts/text-data.sh update
+      - name: Forecast (served models; no training unless none are compatible)
+        run: python3 scripts/pipeline.py timed forecast -- python predict_now.py --store "$STORE" --models "$AIRRAID_MODEL_DIR" --threads 4
+      - name: Model info
+        id: minfo
+        run: python3 scripts/pipeline.py models-info --models "$AIRRAID_MODEL_DIR"
+      - name: Save models trained by the fallback (first run, changed modelling code)
+        if: steps.minfo.outputs.fresh == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: var/models
+          key: ${{ steps.key.outputs.prefix }}-${{ steps.minfo.outputs.suffix }}
+      - name: Threat-type forecast (after the main forecast; optional layer)
+        continue-on-error: true
+        run: python3 scripts/pipeline.py timed threat_type -- bash .github/scripts/threat-type.sh
+      - name: Verify past forecasts
+        continue-on-error: true  # the site then shows the previous verification
+        run: python3 scripts/pipeline.py timed verify -- python verify.py --store "$STORE"
+      # [hook: PR 2, raion layer] build_static_site.py exports api/raions*.json itself
+      - name: Build the static site (same models, forecast and verification; no training)
+        run: python3 scripts/pipeline.py timed build_site -- python scripts/build_static_site.py site
+      - name: Status (api/status.json, _state/pipeline.json, step timings)
+        if: always() && steps.store.outcome == 'success'
+        run: python3 scripts/pipeline.py status --site site --store "$STORE" --models "$AIRRAID_MODEL_DIR"
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+          retention-days: 1
+      - name: Commit the new store partitions to live-data
+        if: always() && steps.store.outcome == 'success'
+        run: bash .github/scripts/live-data.sh commit "pipeline $(date -u +%FT%H:%MZ) ${SOURCE}"
+      - name: "[optional] Text signals: commit text-data"
+        if: always() && hashFiles('src/airraid/text/collect.py') != ''
+        continue-on-error: true
+        run: bash .github/scripts/text-data.sh commit
+      - name: Retrain when the dataset has moved on
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/pipeline.py retrain-check --models "$AIRRAID_MODEL_DIR"
+
+  deploy:
+    needs: run
+    # The github-pages environment only accepts the default branch; other branches
+    # keep the built site as the run's github-pages artifact.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  keepalive:
+    needs: [gate, run, deploy]
+    if: always() && needs.gate.outputs.go == 'true' && vars.PIPELINE_KEEPALIVE != 'off'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: write  # workflow_dispatch of this workflow
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/pipeline.py
+          sparse-checkout-cone-mode: false
+      - env:
+          GITHUB_TOKEN: ${{ github.token }}
+          KEEPALIVE: ${{ vars.PIPELINE_KEEPALIVE }}
+          MAX_HOPS: ${{ vars.PIPELINE_KEEPALIVE_MAX_HOPS }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: python3 scripts/pipeline.py keepalive

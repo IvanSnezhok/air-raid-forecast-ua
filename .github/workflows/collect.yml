@@ -1,25 +1,26 @@
-# Keep what alerts.in.ua reports, with the time we saw it, on the orphan branch
-# `live-data` (point-in-time store, see src/airraid/store.py):
-#   * every 10 min: one /v1/alerts/active.json poll -> alerts_active, polls
-#   * daily (and on demand): /month_ago history per oblast (+ raions when the
-#     oblast history lacks them) -> alerts_history. The API keeps only ~30 days,
-#     so anything not pulled within a month is lost for good.
-# All logic lives in `python -m airraid.collect`; this file only schedules it and
-# commits the result. Scheduled runs start once this file is on the default branch.
+# Daily alerts.in.ua history pull into the point-in-time store on the orphan branch
+# `live-data` (src/airraid/store.py): /month_ago history per oblast (+ raions when
+# the oblast history lacks them) -> alerts_history. The API keeps only ~30 days,
+# so anything not pulled within a month is lost for good. The 10-minute poll of
+# /alerts/active.json is part of the pipeline (pipeline.yml), so there is one
+# writer of live-data per 10 minutes.
+#
+# This job takes ~13 minutes (2 history requests a minute) and runs alongside the
+# pipeline instead of blocking it: both only add new, uniquely named files (each
+# owns its own _state/ file), and .github/scripts/live-data.sh rebases and retries
+# a push that raced the other writer.
 #
 # Secret: ALERTS_IN_UA_TOKEN (the job is skipped without it). Never printed.
-name: collect
+name: collect-history
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
-    - cron: "41 2 * * *"  # daily history pull
+    - cron: "41 2 * * *"
   workflow_dispatch:
-    inputs:
-      history:
-        description: "Also pull the month_ago history"
-        type: boolean
-        default: false
+
+concurrency:
+  group: collect-history
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -29,16 +30,10 @@ env:
   STORE: live-data
 
 jobs:
-  poll:
+  history:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
-    concurrency:
-      group: collect-poll
-      cancel-in-progress: false
-    outputs:
-      ready: ${{ steps.check.outputs.ready }}
+    timeout-minutes: 150
     steps:
-      - uses: actions/checkout@v4
       - name: Check prerequisites
         id: check
         env:
@@ -46,6 +41,8 @@ jobs:
         run: |
           if [ "$HAS_TOKEN" = "true" ]; then echo "ready=true" >> "$GITHUB_OUTPUT"
           else echo "::notice::Skipping: ALERTS_IN_UA_TOKEN secret is not set"; fi
+      - uses: actions/checkout@v4
+        if: steps.check.outputs.ready == 'true'
       - uses: actions/setup-python@v5
         if: steps.check.outputs.ready == 'true'
         with:
@@ -54,36 +51,10 @@ jobs:
         run: pip install -q pandas pyarrow
       - name: Check out the data branch
         if: steps.check.outputs.ready == 'true'
-        run: bash .github/scripts/live-data.sh checkout
-      - name: Poll active alerts
-        if: steps.check.outputs.ready == 'true'
-        env:
-          ALERTS_IN_UA_TOKEN: ${{ secrets.ALERTS_IN_UA_TOKEN }}
-        run: python -m airraid.collect poll --root "$STORE"
-      - name: Commit
-        if: steps.check.outputs.ready == 'true'
-        run: bash .github/scripts/live-data.sh commit "poll $(date -u +%FT%H:%MZ)"
-
-  history:
-    needs: poll
-    if: >-
-      always() && needs.poll.outputs.ready == 'true' && (
-      (github.event_name == 'schedule' && github.event.schedule == '41 2 * * *') ||
-      (github.event_name == 'workflow_dispatch' && inputs.history))
-    runs-on: ubuntu-latest
-    timeout-minutes: 150
-    concurrency:
-      group: collect-history
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: pip install -q pandas pyarrow
-      - name: Check out the data branch
-        run: bash .github/scripts/live-data.sh checkout
+        # 35 days of partitions: the history dedup looks back ~31 days
+        run: STORE_DAYS=35 bash .github/scripts/live-data.sh checkout
       - name: Pull history in chunks, committing after each
+        if: steps.check.outputs.ready == 'true'
         env:
           ALERTS_IN_UA_TOKEN: ${{ secrets.ALERTS_IN_UA_TOKEN }}
         run: |
