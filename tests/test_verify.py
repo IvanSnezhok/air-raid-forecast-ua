@@ -60,3 +60,24 @@ def test_store_labels_after_the_dataset(tmp_path):
     # appended once; a second run adds nothing
     assert store.append(tmp_path, "verification", v.assign(verified_at=m(301)))
     assert store.append(tmp_path, "verification", v.assign(verified_at=m(400))) == []
+
+
+def test_subhour_origins_are_scored_with_the_shifted_labels():
+    """A forecast from 14:20 is scored on 14:20-15:20 (minutes from the origin), exactly the
+    label the features/labels code gives for a grid whose blocks end at :20."""
+    alerts = load_alerts()
+    plain = build_grid(alerts)  # verify's label grid: blocks on the hour
+    shifted = build_grid(alerts, data_end=alerts["start"].max().floor("h") - pd.Timedelta(minutes=40))
+    H, S = hourly_fraction(shifted), hourly_starts(shifted)
+    rng = np.random.default_rng(2)
+    rows = []
+    for k in rng.integers(shifted.n_minutes // 60 - 24 * 60, shifted.n_minutes // 60 - 6, size=5):
+        origin = shifted.t0 + pd.Timedelta(hours=int(k))
+        assert origin.minute == 20
+        for h in HORIZONS:
+            for t in ("active", "onset"):
+                y = labels(shifted, np.array([k]), h, H, t, S)
+                rows += [{"origin": origin, "region": r, "target": t, "horizon": h, "expected": y[i]}
+                         for i, r in enumerate(shifted.regions)]
+    log = pd.DataFrame(rows)
+    np.testing.assert_array_equal(outcomes(log, plain), log["expected"].to_numpy())

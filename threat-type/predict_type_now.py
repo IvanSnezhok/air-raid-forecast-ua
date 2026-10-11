@@ -10,7 +10,7 @@ Writes threat-type/reports/type_forecast_now.csv: per oblast and horizon,
 P(type | an alert starts) for drone, massed_drone, kab, missile, ballistic,
 P(red) and the expected level. When reports/forecast_now.csv from the main
 model exists, also P(alert of each type starts within h hours) =
-P(onset within h) x P(type | onset).
+P(onset within h) x P(type | onset), for the main forecast's origin.
 """
 from __future__ import annotations
 
@@ -34,6 +34,20 @@ from run_type import gbm_fit, rows_for  # noqa: E402
 from threat_lexicon import LEVEL  # noqa: E402
 
 ROUNDS = {1: 70, 3: 50}  # about what early stopping picked in run_type.py
+
+
+def main_origin() -> pd.Timestamp:
+    """The main forecast's origin (reports/forecast_meta.json from predict_now.py), so the
+    P(onset) x P(type | onset) product refers to one moment; else (no recent main forecast)
+    the current minute. Features only use posts and alerts before the origin (features.py)."""
+    now = pd.Timestamp.now(tz="UTC")
+    try:
+        o = pd.Timestamp(json.loads((ROOT / "reports" / "forecast_meta.json").read_text())["origin_utc"], tz="UTC")
+        if now - pd.Timedelta(hours=2) <= o <= now + pd.Timedelta(minutes=1):
+            return o
+    except (OSError, ValueError, KeyError):
+        pass
+    return now.floor("min")
 
 
 def fresh_posts(known_max_id: int, channel: str = "kpszsu", max_pages: int = 150) -> pd.DataFrame:
@@ -77,7 +91,7 @@ def main():
     alerts = load_alerts()
     lab = label_onsets(onsets(alerts), posts)
     known = lab[lab["type"] != "unknown"]
-    origin = pd.Timestamp.now(tz="UTC").floor("h")
+    origin = main_origin()
     regions = sorted(alerts["region"].unique())
     now_rows = pd.DataFrame({"origin": [origin] * len(regions), "region": regions})
 

@@ -39,7 +39,8 @@ def test_live_alerts_change_the_forecast(settings, engine, monkeypatch, tmp_path
     f = e.forecast()
     odesa = next(r for r in f["regions"] if r["name"] == "Odeska oblast")
     assert f["live_source"] == "alerts.in.ua"
-    assert f["origin"] == now.floor("h").isoformat()
+    # origin: the first whole minute at or after the poll (sub-hour origins), not the top of the hour
+    assert f["origin"] == now.isoformat()
     assert odesa["active_at_origin"] is True
     st = e.live_state()
     assert st.regions["Odeska oblast"].locations == ["Подільський район"]

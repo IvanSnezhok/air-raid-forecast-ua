@@ -5,6 +5,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -125,6 +126,22 @@ def create_app(settings: Settings | None = None, engine: ForecastEngine | None =
     async def verification():
         _ready()
         return await run_in_threadpool(engine.verification)
+
+    @app.get("/api/status", tags=["service"], summary="Коли оновлено дані і прогноз")
+    async def status():
+        """When the data and the forecast were last updated (the UI warns when this is over 30 min old).
+
+        The static site publishes the pipeline's own status.json at this path instead
+        (scripts/pipeline.py status: step timings, data ends, verification counts)."""
+        f = await _forecast()
+        now = pd.Timestamp.now(tz="UTC")
+        live = await run_in_threadpool(engine.live_state)
+        return {
+            "updated_at": now.isoformat(), "source": "server",
+            "origin": f["origin"], "issued_at": f.get("issued_at") or now.isoformat(),
+            "last_poll": live.as_of.isoformat() if live.source == "alerts.in.ua" else None,
+            "dataset_end": f["history_end"], "model": f["model"],
+        }
 
     @app.get("/api/metrics", tags=["evaluation"], summary="Якість моделей")
     def metrics():

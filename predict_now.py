@@ -1,13 +1,20 @@
 """Live forecast for the next 1-6 hours for every region.
 
     export ALERTS_IN_UA_TOKEN=...   # optional; never commit it
-    python predict_now.py [--store live-data]   # forecast + forecast log
-    python verify.py [--store live-data]        # score past forecasts once their horizon has passed
+    python predict_now.py [--store live-data] [--models var/models]   # forecast + forecast log
+    python verify.py [--store live-data]                              # score past forecasts
 
-Models are refit (at most every --retrain-hours) on the volunteer dataset only,
-on origins whose label window it fully covers, and saved to models/. Every
-forecast is appended to reports/forecast_log.csv and, with --store, to the
-point-in-time store (src/airraid/store.py) so verify.py can score it.
+Models: the served bundle in --models (src/airraid/training.py), the same one
+the web app and the static site use. The 10-minute pipeline restores it from
+the train job's cache; when no compatible bundle exists (first run, modelling
+code changed) it is trained once here on the volunteer dataset only, origins
+whose label window the dataset fully covers, and saved for the next runs.
+
+Origin: the first whole minute at or after the newest live observation (a store
+poll from the last hour, or a fresh alerts.in.ua poll when ALERTS_IN_UA_TOKEN
+is set); without one, the last hour of the dataset. Every input was known at
+the origin (src/airraid/nowcast.py), so the pipeline forecasts "the next 60
+minutes from 14:13" every 10 minutes instead of repeating the 14:00 forecast.
 
 Prediction features (never training rows) can additionally use, all as known
 at the forecast origin:
@@ -18,6 +25,9 @@ at the forecast origin:
 Live records are turned into oblast-level alerts with the same definition and
 12 h cap as the training data (airraid.live_alerts.oblast_intervals) and can
 never change anything before the end of the dataset.
+
+Every forecast is appended to reports/forecast_log.csv and, with --store, to the
+point-in-time store (`forecasts`) so verify.py can score it.
 """
 from __future__ import annotations
 
@@ -26,37 +36,31 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
-import lightgbm as lgb
-import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
-from airraid import store
-from airraid.data import build_grid, download, load_alerts
-from airraid.features import HORIZONS, add_horizon_features, build_features, hourly_fraction, hourly_starts, labels
-from airraid.live_alerts import OBLAST_EN as UK_TO_EN  # noqa: F401  (old import name)
-from airraid.live_alerts import (
-    KEY, LIVE_EXPIRY_HOURS, fetch_active, gap_alerts, parse_active, store_records, to_frame,
-)
-from airraid.models import GBM
+from airraid import nowcast, store, training  # noqa: E402
+from airraid.data import download, load_alerts  # noqa: E402
+from airraid.live_alerts import OBLAST_EN as UK_TO_EN  # noqa: E402,F401  (old import name)
+from airraid.live_alerts import KEY, LIVE_EXPIRY_HOURS, fetch_active, parse_active, store_records, to_frame  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent
-MODELS_DIR = ROOT / "models"
+MODELS_DIR = Path(os.environ.get("AIRRAID_MODEL_DIR") or ROOT / "var" / "models")
 LOG_PATH = ROOT / "reports" / "forecast_log.csv"
 
 
-def live_records(token: str, origin: pd.Timestamp) -> pd.DataFrame:
-    """Records of a fresh active.json poll that started before the origin.
+def live_records(token: str) -> tuple[pd.DataFrame, pd.Timestamp]:
+    """Records of a fresh active.json poll, and when it was made.
 
-    They were running at the poll, so also at the origin. Records that ended
-    between the origin and the poll are simply missing: their end is after the
-    origin and must not be used.
+    They were running at the poll; their later disappearance is unknown, so
+    finished_at stays NaT (the caller keeps only those that started before the origin).
     """
+    seen = pd.Timestamp.now(tz="UTC")
     df = to_frame(parse_active(fetch_active(token)))
-    df = df[df["started_at"] < origin]
-    return df.assign(finished_at=pd.NaT)
+    return df.assign(finished_at=pd.NaT), seen
 
 
 def git_sha() -> str | None:
@@ -70,71 +74,44 @@ def git_sha() -> str | None:
 
 
 def grids(alerts: pd.DataFrame, hist_end: pd.Timestamp, origin: pd.Timestamp, records: pd.DataFrame | None):
-    """(training grid, feature grid, gap alerts).
+    """(training grid, feature grid, gap alerts), for tests and inspection.
 
-    Training: the dataset only, up to its last full hour. Live records never
-    enter it: between the end of the dataset and the origin they only describe
-    part of what happened (alerts that started and ended between polls are
-    missing), so labels there would be wrong.
+    Training: the dataset only, up to its last full hour (airraid.training).
+    Live records never enter it: between the end of the dataset and the origin
+    they only describe part of what happened (alerts that started and ended
+    between polls are missing), so labels there would be wrong.
     Features: the dataset plus oblast-level alerts rebuilt from the live records
-    known at `origin`, only after the end of the dataset (live_alerts.gap_alerts).
+    known at `origin`, only after the end of the dataset (nowcast.feature_grid).
     """
+    from airraid.data import build_grid
+
     tgrid = build_grid(alerts, data_end=hist_end.floor("h"))
-    gap = gap_alerts(records, origin, alerts)
-    fgrid = build_grid(pd.concat([alerts, gap], ignore_index=True) if len(gap) else alerts, data_end=origin)
-    assert fgrid.regions == tgrid.regions and fgrid.t0 == tgrid.t0
+    fgrid, gap = nowcast.feature_grid(alerts, origin, records)
+    assert fgrid.regions == tgrid.regions
     return tgrid, fgrid, gap
 
 
-def train_models(grid, H, S, base_all, K_all, hist_end, selection, threads: int = 4):
-    """Fit one LightGBM per (target, horizon) on the training grid (dataset only).
-
-    Only origins whose label window lies inside the dataset are used.
-    """
-    last_hour = grid.n_minutes // 60
-    models = {}
-    for h in HORIZONS:
-        df = add_horizon_features(base_all, grid, H, h, S)
-        for t in ("active", "onset"):
-            sel = selection.get(f"{t}_h{h}", {"best_months": 12, "best_trees": 300})
-            y = labels(grid, K_all, h, H, t, S)
-            k = df["origin_hour"].to_numpy()
-            m = ~np.isnan(y) & (k + h <= last_hour)
-            if sel["best_months"] is not None:
-                m &= k >= grid.minute(hist_end - pd.DateOffset(months=sel["best_months"])) // 60
-            models[f"{t}_h{h}"] = GBM(n_estimators=sel["best_trees"], params={"num_threads": threads}).fit(df[m], y[m])
-    return models
-
-
-def save_models(models, trained_until):
-    MODELS_DIR.mkdir(exist_ok=True)
-    meta = {"trained_until_utc": str(trained_until), "models": {}}
-    for key, m in models.items():
-        m.model.save_model(str(MODELS_DIR / f"{key}.txt"), num_iteration=m.n_estimators)
-        meta["models"][key] = {"regions": m.regions, "trees": m.n_estimators}
-    (MODELS_DIR / "meta.json").write_text(json.dumps(meta, indent=2))
-
-
-def load_models(origin, max_age_h):
-    """Reuse saved models if they are fresh and were trained on data before `origin`."""
-    path = MODELS_DIR / "meta.json"
-    if not path.exists():
-        return None, None
-    meta = json.loads(path.read_text())
-    trained_until = pd.Timestamp(meta["trained_until_utc"])
-    if not (trained_until <= origin and origin - trained_until <= pd.Timedelta(hours=max_age_h)):
-        return None, None
-    models = {}
-    for key, info in meta["models"].items():
-        m = GBM(n_estimators=info["trees"])
-        m.regions = info["regions"]
-        m.model = lgb.Booster(model_file=str(MODELS_DIR / f"{key}.txt"))
-        models[key] = m
-    return models, trained_until
+def get_models(alerts: pd.DataFrame, model_dir: Path | None, threads: int, train_if_missing: bool = True,
+               reports_dir: Path = ROOT / "reports"):
+    """(models, meta): the saved bundle when compatible, else trained now (and saved when model_dir is set)."""
+    regions = sorted(alerts["region"].unique())
+    plan, source = training.plans(reports_dir)
+    if model_dir is not None and (b := training.load(model_dir, regions, plan)) is not None:
+        return b[0], b[1]
+    if not train_if_missing:
+        raise SystemExit(f"no compatible models in {model_dir}: {training.incompatible(training.read_meta(model_dir), regions, plan)}")
+    t = time.time()
+    # holdout evaluation is the train job's business; here only the serving models
+    models, meta, ho = training.train(alerts, plan, threads=threads, holdout=False, selection_source=source)
+    print(f"trained {len(models)} models on data up to {meta['data_end']} in {time.time() - t:.0f}s")
+    if model_dir is not None:
+        training.save(model_dir, models, meta, ho)
+    return models, meta
 
 
 def append_log(out_long: pd.DataFrame):
     """Append this run's forecasts to the forecast log (one row per region/target/horizon)."""
+    LOG_PATH.parent.mkdir(exist_ok=True)
     if LOG_PATH.exists():
         old = pd.read_csv(LOG_PATH, parse_dates=["origin", "issued_at", "trained_until"])
         out_long = pd.concat([old, out_long], ignore_index=True)
@@ -143,116 +120,121 @@ def append_log(out_long: pd.DataFrame):
     out_long.to_csv(LOG_PATH, index=False)
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--retrain-hours", type=float, default=24,
-                    help="retrain when saved models are older than this (they never see data after the origin)")
-    ap.add_argument("--as-of", help="replay: forecast as if it were this UTC hour (data after it is "
-                                    "dropped, store rows are used as known then, models are not cached); "
-                                    "e.g. 2026-10-10T12:00")
-    ap.add_argument("--store", type=Path, default=os.environ.get("AIRRAID_STORE") or None,
-                    help="point-in-time store (live-data branch checkout): fills the gap after the dataset "
-                         "and receives the forecasts")
-    ap.add_argument("--threads", type=int, default=int(os.environ.get("AIRRAID_LGB_THREADS", 4)))
-    args = ap.parse_args()
+def forecast(alerts: pd.DataFrame, now: pd.Timestamp, store_root: Path | None = None, token: str | None = None,
+             model_dir: Path | None = MODELS_DIR, threads: int = 4, as_of: bool = False, train: bool = True,
+             reports_dir: Path = ROOT / "reports", complete_until: pd.Timestamp | None = None,
+             ) -> tuple[pd.DataFrame, dict]:
+    """(forecast rows, meta) at the origin defined by the newest live observation before `now`.
 
-    download()
-    alerts = load_alerts()
-    hist_end = alerts["start"].max()
-    now = pd.Timestamp.now(tz="UTC")
-    token = os.environ.get("ALERTS_IN_UA_TOKEN")
-    if args.as_of:
-        now = pd.Timestamp(args.as_of, tz="UTC").floor("h")
-        alerts = alerts[alerts["start"] < now]  # everything after the origin is unknown
-        # Before the dataset end the file is taken as complete up to the origin; after it,
-        # the gap is filled from the store as it was known at the origin.
-        hist_end, token = min(now, hist_end), None
-
-    # Origin: now when something live is known (a token, or store polls up to now),
-    # else the last hour of the dataset.
-    origin = now.floor("h")
-    records, covered, last_poll = None, None, None
-    if args.store is not None:
-        records, covered = store_records(args.store, origin, hist_end)
-        polls = store.load(args.store, "polls", as_of=origin, since=origin - pd.Timedelta(days=1))
+    `alerts` is the volunteer dataset (for a replay: truncated at `now`, and
+    `complete_until` says up to when the truncated file is complete). With
+    `as_of` the origin is `now` itself and the models are trained on `alerts`
+    without being saved.
+    """
+    hist_end = alerts["start"].max() if complete_until is None else complete_until
+    # Newest live observation: a fresh poll (token) or the store's last poll.
+    fresh, seen = None, None
+    last_poll = None
+    if store_root is not None:
+        polls = store.load(store_root, "polls", as_of=now, since=now - pd.Timedelta(days=1))
         last_poll = polls["observed_at"].max() if len(polls) else None
     if token:
-        fresh = live_records(token, origin)
+        fresh, seen = live_records(token)
+    elif last_poll is not None and last_poll > hist_end and now - last_poll <= pd.Timedelta(hours=LIVE_EXPIRY_HOURS):
+        seen = last_poll
+    if as_of:
+        origin = now
+        print(f"replay as of {origin}")
+    elif seen is not None:
+        origin = nowcast.origin_after(seen)
+    else:
+        origin = hist_end.floor("h")
+        print("No ALERTS_IN_UA_TOKEN and no store poll in the last hour: forecasting as of the end of the dataset")
+
+    records, covered = None, None
+    if store_root is not None and origin > hist_end:
+        records, covered = store_records(store_root, origin, hist_end)
+    if fresh is not None:
+        fresh = fresh[fresh["started_at"] < origin]
         records = fresh if records is None else (
             pd.concat([records, fresh], ignore_index=True)  # a known end beats "still running"
             .sort_values("finished_at", na_position="last").drop_duplicates(KEY))
         print(f"alerts.in.ua: {len(fresh)} active records that started before {origin:%H:%M} UTC")
-    elif args.as_of:
-        print(f"replay as of {origin}")
-    elif last_poll is None or last_poll < origin - pd.Timedelta(hours=LIVE_EXPIRY_HOURS):
-        origin = hist_end.floor("h")
-        records = covered = None
-        print("No ALERTS_IN_UA_TOKEN and no store poll in the last hour: forecasting as of the end of the dataset")
     known_until = max(hist_end, covered) if covered is not None else hist_end
     if origin - known_until > pd.Timedelta(hours=6):
         print(f"WARNING: alert record complete only up to {known_until}, {origin - known_until} before the "
               "forecast origin; recent-history features will be understated")
 
-    # Training: the dataset only. Features: dataset + live records known at the origin.
-    tgrid, grid, gap = grids(alerts, hist_end, origin, records)
+    # Training: the dataset only (saved bundle). Features: dataset + live records known at the origin.
+    models, meta = get_models(alerts, None if as_of else model_dir, threads, train_if_missing=train,
+                              reports_dir=reports_dir)
+    trained_until = pd.Timestamp(meta["data_end"])
+    if trained_until > origin:
+        raise SystemExit(f"models were trained on data up to {trained_until}, after the origin {origin}: "
+                         "refusing to forecast with them (retrain on the current dataset)")
+    grid, gap = nowcast.feature_grid(alerts, origin, records)
     if len(gap):
         print(f"gap after the dataset: {len(gap)} oblast-level alerts rebuilt from live records")
-    H, S = hourly_fraction(grid), hourly_starts(grid)
-    k_now = grid.n_minutes // 60
-    base_now = build_features(grid, np.array([k_now]), H)
+    print(f"models trained on data up to {trained_until} ({meta.get('trained_at')})")
 
-    models, trained_until = (None, None) if args.as_of else load_models(origin, args.retrain_hours)
-    if models is None:
-        sel_path = ROOT / "reports" / "selection.json"
-        selection = json.loads(sel_path.read_text()) if sel_path.exists() else {}
-        Ht, St = hourly_fraction(tgrid), hourly_starts(tgrid)
-        K_all = np.arange(28 * 24, tgrid.n_minutes // 60)
-        base_all = build_features(tgrid, K_all, Ht)
-        models = train_models(tgrid, Ht, St, base_all, K_all, hist_end, selection, args.threads)
-        trained_until = tgrid.t0 + pd.Timedelta(minutes=tgrid.n_minutes)  # last moment of data used
-        del base_all
-        if not args.as_of:
-            save_models(models, trained_until)
-        print(f"retrained {len(models)} models on data up to {trained_until}")
-    else:
-        print(f"reusing models trained on data up to {trained_until}")
-
+    log = nowcast.predict(models, grid)
     issued_at = pd.Timestamp.now(tz="UTC").floor("s")
-    sha = git_sha()
-    out = pd.DataFrame({"region": grid.regions})
-    rows = []
-    for h in HORIZONS:
-        x_now = add_horizon_features(base_now, grid, H, h, S)
-        for t, clim_col in (("active", "hod_clim_28d"), ("onset", "onset_clim_28d")):
-            p = models[f"{t}_h{h}"].predict(x_now)
-            out[f"{t}_{h}h"] = p.round(3)
-            # same columns as the web app's ForecastJournal (src/airraid_app/journal.py)
-            rows.append(pd.DataFrame({
-                "origin": origin, "region": grid.regions, "target": t, "horizon": h,
-                "p": p.round(4), "clim": x_now[clim_col].to_numpy().round(4),
-                "issued_at": issued_at, "live": bool(token) or len(gap) > 0,
-                "active_now": x_now["active_now"].to_numpy().astype(int),
-                "trained_until": trained_until, "hist_end": hist_end, "git_sha": sha,
-            }))
-    log = pd.concat(rows, ignore_index=True)
-    append_log(log)
-    if args.store is not None and not args.as_of:
-        store.append(args.store, "forecasts", log)
-
+    log = log.assign(issued_at=issued_at, live=bool(token) or len(gap) > 0 or seen is not None,
+                     trained_until=trained_until, hist_end=hist_end, git_sha=git_sha())
+    if store_root is not None and not as_of:
+        store.append(store_root, "forecasts", log)
     local = origin.tz_convert("Europe/Kyiv")
-    print(f"\nForecast made at {local:%Y-%m-%d %H:%M} Kyiv time")
-    print("active_Nh: P(alert active during hour N); onset_Nh: P(new alert starts within N hours)\n")
-    print(out.sort_values("active_1h", ascending=False).to_string(index=False))
-    out.to_csv(ROOT / "reports" / "forecast_now.csv", index=False)
-    (ROOT / "reports" / "forecast_meta.json").write_text(json.dumps({
+    return log, {
         "origin_kyiv": f"{local:%Y-%m-%d %H:%M}",
         "origin_utc": f"{origin:%Y-%m-%d %H:%M}",
+        "issued_at_utc": f"{issued_at:%Y-%m-%d %H:%M:%S}",
+        "last_poll_utc": None if seen is None else f"{seen:%Y-%m-%d %H:%M:%S}",
         "history_ends_utc": f"{hist_end:%Y-%m-%d %H:%M}",
         "record_complete_until_utc": f"{known_until:%Y-%m-%d %H:%M}",
         "gap_alerts": int(len(gap)),
         "models_trained_until_utc": f"{trained_until:%Y-%m-%d %H:%M}",
+        "models_trained_at_utc": meta.get("trained_at"),
         "live_api": bool(token),
-    }))
+    }
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--as-of", help="replay: forecast as if it were this UTC minute (data after it is "
+                                    "dropped, store rows are used as known then, models are trained on the "
+                                    "truncated dataset and not saved); e.g. 2026-10-10T12:20")
+    ap.add_argument("--store", type=Path, default=os.environ.get("AIRRAID_STORE") or None,
+                    help="point-in-time store (live-data branch checkout): fills the gap after the dataset "
+                         "and receives the forecasts")
+    ap.add_argument("--models", type=Path, default=MODELS_DIR, help="served model bundle (default %(default)s)")
+    ap.add_argument("--no-train", action="store_true", help="fail instead of training when no compatible models")
+    ap.add_argument("--no-download", action="store_true", default=os.environ.get("AIRRAID_DOWNLOAD") == "0",
+                    help="use the local dataset copy (the pipeline downloads it once per run)")
+    ap.add_argument("--threads", type=int, default=int(os.environ.get("AIRRAID_LGB_THREADS", 4)))
+    args = ap.parse_args()
+
+    if not args.no_download:
+        download()
+    alerts = load_alerts()
+    now = pd.Timestamp.now(tz="UTC")
+    token = os.environ.get("ALERTS_IN_UA_TOKEN")
+    complete = None
+    if args.as_of:
+        now = pd.Timestamp(args.as_of, tz="UTC").floor("min")
+        # everything after the origin is unknown; before the dataset end the file is taken as
+        # complete up to the origin, after it the gap is filled from the store as known then
+        complete = min(now, alerts["start"].max())
+        alerts, token = alerts[alerts["start"] < now], None
+    log, meta = forecast(alerts, now, args.store, token, args.models, args.threads, as_of=bool(args.as_of),
+                         train=not args.no_train, complete_until=complete)
+    append_log(log)
+    out = nowcast.wide(log)
+    print(f"\nForecast for the next hours from {meta['origin_kyiv']} Kyiv time")
+    print("active_Nh: P(alert active during hour N); onset_Nh: P(new alert starts within N hours)\n")
+    print(out.sort_values("active_1h", ascending=False).to_string(index=False))
+    (ROOT / "reports").mkdir(exist_ok=True)
+    out.to_csv(ROOT / "reports" / "forecast_now.csv", index=False)
+    (ROOT / "reports" / "forecast_meta.json").write_text(json.dumps(meta))
 
 
 if __name__ == "__main__":

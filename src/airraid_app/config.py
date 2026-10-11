@@ -21,6 +21,10 @@ class Settings:
     model_dir: Path = ROOT / "var" / "models"
     state_dir: Path = ROOT / "var" / "state"  # live alert log and forecast journal
     reports_dir: Path = ROOT / "reports"
+    # Point-in-time store (live-data checkout, airraid.store) written by the pipeline. When set, the
+    # live state, the gap after the dataset, the forecasts and their verification are read from it
+    # (store mode, used by the static site). AIRRAID_STORE, same variable as predict_now.py.
+    store_dir: Path | None = None
     # Threat-type forecast CSV (path or URL) from threat-type/predict_type_now.py; optional.
     type_forecast: str | None = None
     # Live alert state. Never commit the token; set it as an env var / secret.
@@ -51,6 +55,8 @@ class Settings:
             s.state_dir = Path(v)
         if v := env.get("AIRRAID_REPORTS_DIR"):
             s.reports_dir = Path(v)
+        if v := env.get("AIRRAID_STORE") or env.get("AIRRAID_STORE_DIR"):
+            s.store_dir = Path(v)
         s.alerts_token = env.get("ALERTS_IN_UA_TOKEN") or None
         local_types = ROOT / "threat-type" / "reports" / "type_forecast_now.csv"
         s.type_forecast = env.get("AIRRAID_TYPE_FORECAST") or (str(local_types) if local_types.exists() else None)
