@@ -50,11 +50,16 @@ def cmd_update(a) -> int:
 
 def cmd_backfill(a) -> int:
     root = Path(a.root)
+    errors = 0
     with ThreadPoolExecutor(max_workers=max(1, a.parallel)) as ex:
-        futs = [ex.submit(telegram.backfill, root, ch, a.since, a.max_minutes, log=_log) for ch in a.channels]
-        for f in futs:
-            _log(json.dumps(f.result(), default=str))
-    return 0
+        futs = {ch: ex.submit(telegram.backfill, root, ch, a.since, a.max_minutes, log=_log) for ch in a.channels}
+        for ch, f in futs.items():
+            try:
+                _log(json.dumps(f.result(), default=str))
+            except Exception as e:  # one channel failing must not stop the others
+                errors += 1
+                _log(f"ERROR {ch}: {e!r}")
+    return 1 if errors else 0
 
 
 def cmd_gdelt(a) -> int:

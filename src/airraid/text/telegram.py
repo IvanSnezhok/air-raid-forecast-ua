@@ -86,10 +86,10 @@ def parse_page(html: str, channel: str) -> list[dict]:
     return out
 
 
-def fetch_page(channel: str, before: int | None = None) -> list[dict]:
+def fetch_page(channel: str, before: int | None = None, tries: int = 5) -> list[dict]:
     url = f"https://t.me/s/{channel}" + (f"?before={before}" if before else "")
     seen_at = archive.now_utc()
-    page = parse_page(get(url).decode("utf-8", "replace"), channel)
+    page = parse_page(get(url, tries=tries).decode("utf-8", "replace"), channel)
     for p in page:
         p["seen_at"] = seen_at
     return page
@@ -156,35 +156,40 @@ def backfill(root, channel: str, since: str, max_minutes: float = 60, pause: flo
         st["min_id"] = int(recs["id"].min())
     before = st.get("min_id") or int(archive.read_records(root, "telegram", channel)["id"].min())
     t_end = time.time() + max_minutes * 60
-    rows, pages, reached = [], 0, False
+    rows, pages, reached, error = [], 0, False, None
     oldest = pd.Timestamp(st["complete_from"]) if st.get("complete_from") else None
-    while time.time() < t_end:
-        page = fetch_page(channel, before)
-        pages += 1
-        if not page:
-            reached = True  # start of the channel
-            break
-        rows += page
-        lo = min(p["id"] for p in page)
-        oldest = min(p["date"] for p in page)
-        if lo >= before:
-            break
-        before = lo
-        if oldest < since_ts:
-            reached = True
-            break
-        if len(rows) >= 5000:  # flush now and then so an interrupted run keeps its work
-            archive.upsert(root, "telegram", channel, _obs(rows))
-            st["min_id"], st["complete_from"] = before, archive._iso(oldest)
-            archive.write_state(root, "telegram", channel, st)
-            log(f"{channel}: back to {oldest}")
-            rows = []
-        time.sleep(pause)
-    obs = _obs(rows)
-    n_new, _, _ = archive.upsert(root, "telegram", channel, obs)
+    try:
+        while time.time() < t_end:
+            page = fetch_page(channel, before, tries=8)
+            pages += 1
+            if not page:
+                reached = True  # start of the channel
+                break
+            lo = min(p["id"] for p in page)
+            if lo >= before:
+                break
+            rows += page
+            before = lo
+            oldest = min(p["date"] for p in page)
+            if oldest < since_ts:
+                reached = True
+                break
+            if len(rows) >= 2000:  # flush now and then so an interrupted run keeps its work
+                archive.upsert(root, "telegram", channel, _obs(rows))
+                st["min_id"], st["complete_from"] = int(before), archive._iso(oldest)
+                archive.write_state(root, "telegram", channel, st)
+                log(f"{channel}: back to {oldest}")
+                rows = []
+            time.sleep(pause)
+    except Exception as e:  # keep what we have; the next run resumes from min_id
+        error = e
+    n_new, _, _ = archive.upsert(root, "telegram", channel, _obs(rows))
     st["min_id"] = int(before)
     st["complete_from"] = archive._iso(since_ts if reached else oldest)
+    st["last_error"] = None if error is None else f"{archive.now_utc()}: backfill {error!r}"
     archive.write_state(root, "telegram", channel, st)
+    if error is not None:
+        log(f"ERROR {channel}: backfill stopped at {oldest} ({error!r}); run it again to resume")
     log(f"{channel}: backfill {pages} pages, +{n_new}, complete from {st['complete_from']} (reached={reached})")
     return {"channel": channel, "pages": pages, "new": n_new, "complete_from": st["complete_from"]}
 
