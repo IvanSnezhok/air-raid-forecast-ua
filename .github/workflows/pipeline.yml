@@ -55,6 +55,7 @@ env:
   AIRRAID_MODEL_DIR: var/models
   AIRRAID_DOWNLOAD: "0"  # the dataset is downloaded once per run, by its own step
   AIRRAID_RAION_TRAIN: "0"  # [hook: raion layer] load raion models from <models>/raions, never train here
+  AIRRAID_TEXT_TRAIN: "0"   # [hook: text signals] load text models from <models>/text; if missing, serve history-only
   SOURCE: ${{ inputs.source || github.event_name }}
   HOP: ${{ inputs.hop || '0' }}
 
