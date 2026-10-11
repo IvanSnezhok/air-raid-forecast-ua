@@ -345,9 +345,24 @@ Everything runs on GitHub Actions; nothing needs a laptop or a server.
 | the site (`api/*.json`, UI) | GitHub Pages | pipeline (deploy job) |
 | Air Force posts (threat-type model) | branch `threat-labels-data` | threat-labels.yml |
 
-**Cadence and timings.** Measured on GitHub-hosted runners (links in the PR):
+**Cadence and timings.** A run starts every 10 minutes and takes about a minute; measured
+on GitHub-hosted runners on 11 Oct 2026 (runs 2, 4 and 5 of the end-to-end test):
 
-TIMINGS_TABLE
+| step | seconds |
+|---|---|
+| setup: checkout, Python, packages (pip cache), model cache restore | 23–26 |
+| check out the store (last 10 days, no blobs) | 0.5–0.9 |
+| download the dataset / poll alerts.in.ua | 0.6–0.8 / 0.7–0.8 |
+| forecast with the cached models | 3.3–3.5 |
+| threat-type forecast (retrains its two small models) | 25–27 |
+| verify | 1.8–1.9 |
+| build the static site | 5.4–6.0 |
+| **run job, start to store commit** | **67–72** |
+
+The gate job takes 3–6 s. Without a model cache (first run, changed modelling code) the
+forecast step trains the serving models itself in about 90 s; the train job (holdout
+week + final refit) takes about 3.5 minutes. The forecast is logged about 3 s after the
+poll and the site is built about 40 s after it.
 
 **Sub-hour origins.** The forecast origin is the first whole minute after the newest poll
 (`airraid.nowcast`), so every run forecasts "the next 60 minutes from 14:13", not the
@@ -390,8 +405,9 @@ twice. A 10-minute site cannot rely on it. The layers, from most to least reliab
    switch, not a loop: runs never overlap (one concurrency group), a chain of runs
    started only by the keep-alive stops after `PIPELINE_KEEPALIVE_MAX_HOPS` (default
    72, about 12 hours) until a real trigger restarts it, and `PIPELINE_KEEPALIVE=off`
-   disables it. Verified on this branch: run 2 finished at 22:41, nothing else had
-   started a run by 22:46, the keep-alive dispatched run 3 at 22:46:01.
+   disables it. In the end-to-end test (PR #10) a run finished at 22:49, nothing else
+   started one for the 22:53 slot, and the keep-alive dispatched the next run at
+   22:56:02, which ran normally and continued the chain.
 3. **`schedule`** every 10 minutes at :03/:13/… (off the congested top of the hour).
 
 Terms: Actions minutes on standard runners are free and unlimited for public
