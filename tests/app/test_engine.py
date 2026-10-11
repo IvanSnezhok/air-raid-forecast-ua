@@ -81,3 +81,19 @@ def test_map_covers_every_dataset_region():
     drawn = set(geo["regions"]) | {"Kyiv City"}
     assert set(UK_NAMES) - EXCLUDED_REGIONS <= drawn
     assert set(geo["labels"]) >= set(UK_NAMES) - EXCLUDED_REGIONS
+
+
+def test_metrics_with_walk_forward_reports(settings, engine, tmp_path):
+    """/api/metrics reads run.py's walk-forward table when reports/run_summary.json exists."""
+    from dataclasses import replace
+
+    d = tmp_path / "reports"
+    d.mkdir()
+    (d / "run_summary.json").write_text(json.dumps({"split": {"test": ["2026-09-12", "2026-10-10"]}}))
+    pd.DataFrame([{"target": "active", "horizon_h": 1, "model": "lightgbm", "bss_vs_clim": 0.3}]).to_csv(
+        d / "metrics_test.csv", index=False)
+    e = ForecastEngine(replace(settings, reports_dir=d))
+    e.meta, e.holdout = engine.meta, engine.holdout
+    m = e.metrics()
+    assert m["walk_forward"]["test"] == ["2026-09-12", "2026-10-10"] and m["walk_forward"]["scores"][0]["model"] == "lightgbm"
+    assert m["holdout"]["scores"]
