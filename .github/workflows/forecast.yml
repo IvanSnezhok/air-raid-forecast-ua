@@ -1,0 +1,68 @@
+# Refresh the forecast on a schedule and publish the demo page.
+#
+# Secrets (Settings -> Secrets and variables -> Actions):
+#   ALERTS_IN_UA_TOKEN  optional; without it the forecast is made as of the end
+#                       of the volunteer dataset (updated about once a day)
+# Variables:
+#   PAGES_ENABLED=true  set after enabling Pages (Settings -> Pages -> Source:
+#                       GitHub Actions). (public repo: free).
+name: forecast
+
+on:
+  schedule:
+    # Hourly, a few minutes past the hour. Free on a public repo; on a private
+    # Free-plan repo switch to "7 */3 * * *" to stay under 2000 min/month.
+    - cron: "7 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: forecast
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  forecast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Forecast
+        env:
+          ALERTS_IN_UA_TOKEN: ${{ secrets.ALERTS_IN_UA_TOKEN }}
+        run: |
+          mkdir -p reports
+          python predict_now.py
+      - name: Build page
+        run: python demo/make_site.py reports/forecast_now.csv site
+      - uses: actions/upload-artifact@v4
+        with:
+          name: forecast
+          path: |
+            reports/forecast_now.csv
+            site/
+          retention-days: 14
+      - if: vars.PAGES_ENABLED == 'true'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    if: vars.PAGES_ENABLED == 'true'
+    needs: forecast
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
