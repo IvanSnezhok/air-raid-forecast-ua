@@ -68,9 +68,10 @@ jobs:
           TG_API_HASH: ${{ secrets.TG_API_HASH }}
           TG_SESSION_STRING: ${{ secrets.TG_SESSION_STRING }}
         working-directory: text-features
-        # --since only matters on the first run; later runs resume from the
-        # last stored post id per channel.
-        run: python collect_telegram.py backfill --since 2024-01-01
+        # --since only matters on the first runs; each run stops after
+        # --budget-min so the Commit step always runs, and the next run
+        # resumes from the last stored post id per channel.
+        run: python collect_telegram.py backfill --since 2024-01-01 --budget-min 10
       - name: Commit
         if: steps.check.outputs.ready == 'true'
         working-directory: tgdata
