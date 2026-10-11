@@ -103,6 +103,7 @@ def main():
     ap.add_argument("--text-rules", default="strict,permissive",
                     help="available_at rules to evaluate; the first one is the main text model")
     ap.add_argument("--text-channels", default=None, help="comma-separated channels (default: all model channels)")
+    ap.add_argument("--text-tag", default="", help="suffix for the ablation's output files (sensitivity runs)")
     args = ap.parse_args()
     if args.download:
         download()
@@ -298,7 +299,7 @@ def text_ablation(grid, H, S, targets, val_start, test_start, test_end, args):
         variants[f"lightgbm_text_{r}"] = lambda d, r=r: with_rule(d, r)
 
     # ---- 1. trees per model on the validation month (same window for both) ----
-    sel_path = REPORTS / "text_selection.json"
+    sel_path = REPORTS / f"text_selection{args.text_tag}.json"
     sel = json.loads(sel_path.read_text()) if args.reuse_selection and sel_path.exists() else {}
     sel_key = f"{cov_start} {','.join(sorted(cov))}"
     if sel.get("_key") != sel_key:
@@ -351,12 +352,12 @@ def text_ablation(grid, H, S, targets, val_start, test_start, test_end, args):
                 log(f"text {t} h={h} fold {i}: train {len(tr):,} rows from {cov_start:%Y-%m-%d}, test {len(te):,}")
     P = pd.concat(preds, ignore_index=True)
     P["origin_utc"] = grid.t0 + pd.to_timedelta(P["origin_hour"], unit="h")
-    P.drop(columns=["origin_hour"]).to_parquet(REPORTS / "text_test_predictions.parquet")
+    P.drop(columns=["origin_hour"]).to_parquet(REPORTS / f"text_test_predictions{args.text_tag}.parquet")
     imp = pd.concat(importances, axis=1).mean(axis=1).sort_values(ascending=False)
-    _text_report(P, imp, list(variants), targets, test_start, test_end, cov_start, cov, rules, sel)
+    _text_report(P, imp, list(variants), targets, test_start, test_end, cov_start, cov, rules, sel, args.text_tag)
 
 
-def _text_report(P, imp, models, targets, test_start, test_end, cov_start, cov, rules, sel):
+def _text_report(P, imp, models, targets, test_start, test_end, cov_start, cov, rules, sel, tag=""):
     rows, diffs = [], []
     ref = REPORTS / "metrics_test.csv"
     main = pd.read_csv(ref) if ref.exists() else None
@@ -376,11 +377,11 @@ def _text_report(P, imp, models, targets, test_start, test_end, cov_start, cov, 
             diffs.append({"target": t, "horizon_h": h, "model": name, "brier_diff_vs_cov": d,
                           "ci95_lo": lo, "ci95_hi": hi, "rel_change_pct": 100 * d / base_b})
     M, D = pd.DataFrame(rows), pd.DataFrame(diffs)
-    M.to_csv(REPORTS / "text_ablation.csv", index=False)
-    D.to_csv(REPORTS / "text_ablation_diff.csv", index=False)
-    imp.head(40).to_csv(REPORTS / "text_feature_importance.csv", header=["gain"])
+    M.to_csv(REPORTS / f"text_ablation{tag}.csv", index=False)
+    D.to_csv(REPORTS / f"text_ablation_diff{tag}.csv", index=False)
+    imp.head(40).to_csv(REPORTS / f"text_feature_importance{tag}.csv", header=["gain"])
     order = ["climatology_28d", "lightgbm (all history, main run)", *models]
-    with open(REPORTS / "text_ablation.md", "w") as f:
+    with open(REPORTS / f"text_ablation{tag}.md", "w") as f:
         f.write(f"Telegram ablation. Test: walk-forward, weekly retrain, origins {test_start:%Y-%m-%d %H:%M} .. "
                 f"{test_end:%Y-%m-%d %H:%M} UTC (same weeks and rows as metrics_test.md).\n"
                 f"`lightgbm_cov` (alert history only) and `lightgbm_text` (alert history + Telegram) are trained on "
@@ -417,7 +418,7 @@ def _text_report(P, imp, models, targets, test_start, test_end, cov_start, cov, 
         ax.set_title(f"target: {t}, with vs without Telegram")
         ax.legend(fontsize=7)
     fig.tight_layout()
-    fig.savefig(FIG / "text_ablation.png", dpi=130)
+    fig.savefig(FIG / f"text_ablation{tag}.png", dpi=130)
     plt.close(fig)
 
     fig, axes = plt.subplots(len(targets), len(HORIZONS), figsize=(4 * len(HORIZONS), 3.6 * len(targets)), squeeze=False)
@@ -431,7 +432,7 @@ def _text_report(P, imp, models, targets, test_start, test_end, cov_start, cov, 
             ax.set_title(f"{t}, {h} h", fontsize=9)
             ax.legend(fontsize=6)
     fig.tight_layout()
-    fig.savefig(FIG / "text_reliability.png", dpi=110)
+    fig.savefig(FIG / f"text_reliability{tag}.png", dpi=110)
     plt.close(fig)
 
 

@@ -26,9 +26,13 @@ import re
 
 # Stems per oblast; major cities and frequent targets where they identify the oblast.
 _REGION_PATTERNS: dict[str, str] = {
-    "Kyiv City": r"\bки[їє]в(?!щин|ськ)\w*|\bстолиц\w*",
-    "Kyivska oblast": r"\bкиївщин\w*|\bкиївськ\w* обл\w*|\bбіла церкв\w*|\bбровар\w*|\bбориспол\w*|\bфастів\w*"
-                      r"|\bвишгород\w*|\bобухів\w*|\bвасильків\w*|\bірпін\w*|\bбуч\w*",
+    # city districts are how the volunteer radars (monitorwarr, war_monitor) name targets in Kyiv
+    "Kyiv City": r"\bки[їє]в(?!щин|ськ)\w*|\bстолиц\w*|\bоболон\w*|\bсвятошин\w*|\bтеличк\w*|\bкуренівк\w*"
+                 r"|\bберезняк\w*|\bтроєщин\w*|\bпозняк\w*|\bосокорк\w*|\bдарниц\w*|\bголосі[їє]в\w*|\bсолом.ян\w*"
+                 r"|\bшулявк\w*|\bжулян\w*|\bвиноградар\w*|\bлук.янівк\w*|\bрусанівк\w*|\bпечерськ\w*",
+    "Kyivska oblast": r"\bкиївщин\w*|\bкиївськ\w* обл\w*|\bбіла церкв\w*|\bбілої церкв\w*|\bбровар\w*"
+                      r"|\bборисп[іо]л\w*|\bфаст[іо]в\w*|\bвишгород\w*|\bобух[іо]в\w*|\bвасильк[іо]в\w*|\bірпін\w*"
+                      r"|\bбуч[аіу]\b|\bгостомел\w*|\bбоярк\w*|\bбілогородк\w*|\bдимер\w*|\bузин\w*|\bбородянк\w*",
     "Kharkivska oblast": r"\bхарк[іо]в\w*|\bкуп.янськ\w*|\bчугу[єї]в\w*|\bізюм\w*",
     "Dnipropetrovska oblast": r"\bдніпр\w*|\bкривий ріг|\bкривого рогу|\bкривор\w*|\bнікопол\w*|\bпавлоград\w*|\bкам.янськ\w*",
     "Zaporizka oblast": r"\bзапор[іо]ж\w*",
@@ -93,6 +97,9 @@ ATTACK_SENTENCE_RE = re.compile(r"(?:атакував|застосував)[^\n]
 DRONE_COUNT_RE = re.compile(r"(\d{1,4})(?:-\w+)?\s+(?:ударн\w*\s+)?(?:бпла|безпілот\w*|дрон\w*|шахед\w*)")
 MISSILE_COUNT_RE = re.compile(r"(\d{1,3})(?:-\w+)?\s+(?:\w+\s+){0,2}(?:ракет\w*)")
 ALL_CLEAR_RE = re.compile(r"\bвідбій\b|загроз\w* минул\w*|загроз\w* відсутн\w*")
+# volunteer radars write "Одещина чисто": an all-clear only when no threat is named
+# ("... 📡 По іншим шахедам чисто" still reports drones)
+CLEAR_WORD_RE = re.compile(r"\bчисто\b")
 ATTACK_NEWS_RE = re.compile(r"повітрян\w* тривог\w*|\bатак\w*|обстріл\w*|\bудар\w*|\bвлучан\w*")
 
 
@@ -111,6 +118,7 @@ def classify(text: str) -> dict:
     summary = bool(SUMMARY_RE.search(t))
     all_clear = bool(ALL_CLEAR_RE.search(t))
     threats = [] if all_clear else [k for k in CLASSES if THREAT_RE[k].search(t)]
+    all_clear = all_clear or (not threats and bool(CLEAR_WORD_RE.search(t)))
     drones = missiles = None
     if summary:
         sent = ATTACK_SENTENCE_RE.search(t)

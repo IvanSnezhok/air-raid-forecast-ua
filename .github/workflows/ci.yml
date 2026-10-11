@@ -26,5 +26,7 @@ jobs:
         run: pytest tests/test_leakage.py -q
       - name: Threat-type no-leakage tests
         run: pytest threat-type/tests -q
+      - name: Telegram text features no-leakage tests (synthetic, offline)
+        run: pytest tests/test_text_leakage.py -q
       - name: Docker image builds
         run: docker build -t airraid .
