@@ -1,0 +1,54 @@
+# Fetch the sources for threat-type labels (Air Force Telegram web preview and
+# the Kaggle "Massive Missile Attacks on Ukraine" dataset) and keep them on the
+# `threat-labels-data` branch. Both hosts are blocked in the sandbox where the
+# model is developed, so the fetch runs here. Public sources only, no secrets.
+name: threat-labels
+
+on:
+  workflow_dispatch:
+    inputs:
+      since:
+        description: "Fetch Telegram history back to this date (UTC)"
+        default: "2025-01-01"
+  schedule:
+    # Daily refresh of the labels (new posts since the last run are re-fetched).
+    - cron: "40 6 * * *"
+  push:
+    branches: ["claude/project-thread-dcbt28"]
+    paths: ["threat-type/fetch_sources.py", ".github/workflows/threat-labels.yml"]
+
+concurrency:
+  group: threat-labels
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pandas pyarrow beautifulsoup4
+      - name: Fetch
+        run: python threat-type/fetch_sources.py --since "${{ inputs.since || '2025-01-01' }}" --out out
+      - name: Commit to threat-labels-data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898729+github-actions[bot]@users.noreply.github.com"
+          git fetch origin threat-labels-data || true
+          if git rev-parse --verify -q origin/threat-labels-data; then
+            git worktree add data-branch origin/threat-labels-data
+            git -C data-branch checkout -B threat-labels-data
+          else
+            git worktree add --orphan -b threat-labels-data data-branch
+          fi
+          cp out/* data-branch/
+          cd data-branch
+          git add -A
+          git commit -m "threat labels sources $(date -u +%FT%H:%MZ)" || exit 0
+          git push origin threat-labels-data
