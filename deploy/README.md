@@ -8,7 +8,7 @@ Workflow лежать у `.github/workflows/`, генератор сторінк
 
 | Workflow | Розклад | Що робить | Секрети |
 |---|---|---|---|
-| `forecast.yml` | щогодини (можна вручну) | качає свіжий датасет, `predict_now.py`, будує `site/index.html`, публікує на Pages (якщо ввімкнено) і завжди кладе сторінку як артефакт запуску | `ALERTS_IN_UA_TOKEN` (необовʼязково) |
+| `forecast.yml` | щогодини (можна вручну) | качає свіжий датасет, `predict_now.py`, будує `site/index.html` і кладе його як артефакт запуску (на Pages публікує `pages.yml`, вебінтерфейс) | `ALERTS_IN_UA_TOKEN` (необовʼязково) |
 | `telegram.yml` | кожні 30 хв | `collect_telegram.py backfill` дозбирує нові пости і комітить їх у гілку `telegram-data` | `TG_API_ID`, `TG_API_HASH`, `TG_SESSION_STRING` |
 
 Один прогноз займає близько 1 хв на 4 ядрах (заміряно), на раннері GitHub
@@ -23,8 +23,9 @@ Workflow лежать у `.github/workflows/`, генератор сторінк
   без Pro (Pro безкоштовний у GitHub Student Developer Pack).
 * Без Pages сторінку можна скачати з артефакту запуску (`forecast` -> `site/index.html`).
 
-Увімкнути Pages: Settings -> Pages -> Source: GitHub Actions, потім
-Settings -> Secrets and variables -> Actions -> Variables: `PAGES_ENABLED=true`.
+Pages публікує `pages.yml` (вебінтерфейс): Settings -> Pages -> Source: GitHub Actions.
+Токен alerts.in.ua для живого стану: секрет репозиторію `ALERTS_IN_UA_TOKEN`
+(Settings -> Secrets and variables -> Actions -> Secrets).
 
 ## Telegram
 
