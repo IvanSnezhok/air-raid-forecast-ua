@@ -37,7 +37,7 @@ from airraid import store
 from airraid.data import build_grid, download, load_alerts
 from airraid.features import HORIZONS, add_horizon_features, build_features, hourly_fraction, hourly_starts, labels
 from airraid.live_alerts import OBLAST_EN as UK_TO_EN  # noqa: F401  (old import name)
-from airraid.live_alerts import fetch_active, gap_alerts, parse_active, store_records, to_frame
+from airraid.live_alerts import KEY, fetch_active, gap_alerts, parse_active, store_records, to_frame
 from airraid.models import GBM
 
 ROOT = Path(__file__).resolve().parent
@@ -174,7 +174,9 @@ def main():
         records, covered = store_records(args.store, origin, hist_end)
     if token:
         fresh = live_records(token, origin)
-        records = fresh if records is None else pd.concat([records, fresh], ignore_index=True)
+        records = fresh if records is None else (
+            pd.concat([records, fresh], ignore_index=True)  # a known end beats "still running"
+            .sort_values("finished_at", na_position="last").drop_duplicates(KEY))
         print(f"alerts.in.ua: {len(fresh)} active records that started before {origin:%H:%M} UTC")
     elif args.as_of:
         print(f"replay as of {origin}")
@@ -203,7 +205,7 @@ def main():
         K_all = np.arange(28 * 24, tgrid.n_minutes // 60)
         base_all = build_features(tgrid, K_all, Ht)
         models = train_models(tgrid, Ht, St, base_all, K_all, hist_end, selection, args.threads)
-        trained_until = hist_end
+        trained_until = tgrid.t0 + pd.Timedelta(minutes=tgrid.n_minutes)  # last moment of data used
         del base_all
         if not args.as_of:
             save_models(models, trained_until)
