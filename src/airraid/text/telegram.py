@@ -10,6 +10,7 @@ never overwritten, so features can use exactly what was public at the time.
 """
 from __future__ import annotations
 
+import http.client
 import time
 import urllib.error
 import urllib.request
@@ -48,7 +49,7 @@ def get(url: str, tries: int = 5, ua: str = UA) -> bytes:
                 time.sleep(2 ** (i + 1))
                 continue
             raise
-        except (urllib.error.URLError, TimeoutError, ConnectionError):
+        except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException):
             if i < tries - 1:
                 time.sleep(2 ** (i + 1))
                 continue
