@@ -87,3 +87,32 @@ def test_not_ready_returns_503(settings):
     with TestClient(create_app(settings, ForecastEngine(settings))) as c:
         assert c.get("/api/forecast").status_code == 503
         assert c.get("/api/health").json()["status"] == "starting"
+
+
+def test_threat_types(client):
+    f = client.get("/api/forecast").json()
+    assert f["threats"]["horizons"] == [1, 3]
+    assert {t["id"] for t in f["threats"]["types"]} == {"drone", "massed_drone", "kab", "missile", "ballistic"}
+    by = {r["name"]: r["types"] for r in f["regions"]}
+    assert by["Kyiv City"]["1"]["most_likely"] == "drone"
+    assert by["Kyiv City"]["3"]["p_type"]["missile"] == 0.15
+    assert by["Odeska oblast"] is None
+    t = client.get("/api/threats").json()
+    assert t["origin"] == "2026-09-13 10:00" and len(t["regions"]) == 3
+    assert client.get("/api/regions/kyiv-city").json()["types"]["1"]["level"] == "yellow"
+
+
+def test_threat_types_missing_is_optional(settings, engine):
+    from fastapi.testclient import TestClient
+
+    from airraid_app.api import create_app
+    from airraid_app.config import Settings
+
+    s = Settings(**{**vars(settings), "type_forecast": str(settings.data_path.parent / "nope.csv")})
+    from airraid_app.engine import ForecastEngine
+
+    e = ForecastEngine(s)
+    e.bootstrap()
+    with TestClient(create_app(s, e)) as c:
+        assert c.get("/api/forecast").json()["threats"] is None
+        assert c.get("/api/threats").status_code == 404

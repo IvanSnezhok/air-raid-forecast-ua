@@ -14,6 +14,7 @@ from . import __version__
 from .config import Settings
 from .engine import ForecastEngine, NotReady
 from .regions import slug, uk_name
+from .threats import LEVEL, TYPE_SHORT, TYPE_UK, TYPES
 
 STATIC = Path(__file__).resolve().parent / "static"
 
@@ -80,12 +81,30 @@ def create_app(settings: Settings | None = None, engine: ForecastEngine | None =
             ],
         }
 
+    def _threats_meta(t: dict | None) -> dict | None:
+        if not t:
+            return None
+        return {"origin": t["origin_utc"], "posts_until": t["posts_until_utc"], "horizons": t["horizons"],
+                "types": [{"id": k, "name_uk": TYPE_UK[k], "short": TYPE_SHORT[k], "level": LEVEL[k]} for k in TYPES]}
+
     @app.get("/api/forecast", tags=["forecast"], summary="Прогноз для всіх областей")
     async def forecast():
         f = await _forecast()
+        t = await run_in_threadpool(engine.threats.get)
         return {k: v for k, v in f.items() if k != "regions"} | {
-            "regions": [{k: r[k] for k in ("id", "name", "name_uk", "active_at_origin", "probs")} for r in f["regions"]]
+            "threats": _threats_meta(t),
+            "regions": [{**{k: r[k] for k in ("id", "name", "name_uk", "active_at_origin", "probs")},
+                         "types": (t or {}).get("regions", {}).get(r["name"])} for r in f["regions"]],
         }
+
+    @app.get("/api/threats", tags=["forecast"], summary="Прогноз типу загрози (дрони, ракети, балістика) і рівня")
+    async def threats():
+        _ready()
+        t = await run_in_threadpool(engine.threats.get)
+        if not t:
+            raise HTTPException(404, detail="threat-type forecast is not configured (AIRRAID_TYPE_FORECAST)")
+        return _threats_meta(t) | {"regions": [{"id": slug(r), "name": r, "name_uk": uk_name(r), "types": v}
+                                               for r, v in sorted(t["regions"].items())]}
 
     @app.get("/api/regions/{region_id}", tags=["forecast"], summary="Прогноз, історія і якість для однієї області")
     async def region(region_id: str):
@@ -97,6 +116,7 @@ def create_app(settings: Settings | None = None, engine: ForecastEngine | None =
             **match,
             "origin": f["origin"], "origin_kyiv": f["origin_kyiv"], "windows": f["windows"],
             "holdout": engine.region_holdout(match["name"]),
+            "types": ((await run_in_threadpool(engine.threats.get)) or {}).get("regions", {}).get(match["name"]),
             "verification": (await run_in_threadpool(engine.verification, match["name"]))["recent"],
         }
 

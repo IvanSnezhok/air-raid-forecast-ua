@@ -21,6 +21,8 @@ class Settings:
     model_dir: Path = ROOT / "var" / "models"
     state_dir: Path = ROOT / "var" / "state"  # live alert log and forecast journal
     reports_dir: Path = ROOT / "reports"
+    # Threat-type forecast CSV (path or URL) from threat-type/predict_type_now.py; optional.
+    type_forecast: str | None = None
     # Live alert state. Never commit the token; set it as an env var / secret.
     alerts_token: str | None = None
     # Download a fresh copy of the volunteer dataset on start and every refresh.
@@ -50,6 +52,8 @@ class Settings:
         if v := env.get("AIRRAID_REPORTS_DIR"):
             s.reports_dir = Path(v)
         s.alerts_token = env.get("ALERTS_IN_UA_TOKEN") or None
+        local_types = ROOT / "threat-type" / "reports" / "type_forecast_now.csv"
+        s.type_forecast = env.get("AIRRAID_TYPE_FORECAST") or (str(local_types) if local_types.exists() else None)
         s.download = _env_bool("AIRRAID_DOWNLOAD", s.download)
         for name, attr, cast in (
             ("AIRRAID_TRAIN_MONTHS", "train_months", int),

@@ -34,6 +34,7 @@ from airraid.models import GBM, feature_columns
 
 from .config import Settings
 from .journal import ForecastJournal, LiveRecorder
+from .threats import ThreatForecast
 from .live import LiveState, fetch_active, parse_active, state_from_dataset
 from .regions import slug, uk_name
 
@@ -84,6 +85,7 @@ class ForecastEngine:
         self._stop = threading.Event()
         self.recorder = LiveRecorder(settings.state_dir / "live_alerts.csv")
         self.journal = ForecastJournal(settings.state_dir / "forecast_journal.parquet")
+        self.threats = ThreatForecast(settings.type_forecast)
 
     # ------------------------------------------------------------------ data
     def load_data(self, refresh: bool | None = None) -> None:
@@ -220,6 +222,8 @@ class ForecastEngine:
             return False
         if meta.get("format") != MODEL_FORMAT or meta.get("regions") != self.regions:
             return False
+        if meta.get("plans") != {f"{t}_h{h}": vars(p) for (t, h), p in self._plans().items()}:
+            return False  # training window / trees changed (e.g. run.py produced a new selection)
         if self.hist_end is not None:
             age = self.hist_end - pd.Timestamp(meta["data_end"])
             if age > pd.Timedelta(hours=self.s.retrain_h):
@@ -336,6 +340,14 @@ class ForecastEngine:
             hh, lh = H[i, last28] > 0, local_hour[last28]
             profile[r] = [round(float(hh[lh == x].mean()), 3) if (lh == x).any() else 0.0 for x in range(24)]
 
+        # Daily calendar: minutes under alert per Kyiv-local day over the last year.
+        n_day = min(H.shape[1], 367 * 24)
+        hrs = grid.t0 + pd.to_timedelta(np.arange(H.shape[1] - n_day, H.shape[1]), unit="h")
+        day_key = hrs.tz_convert(KYIV).normalize().tz_localize(None)
+        daily_df = pd.DataFrame((H[:, -n_day:] * 60).T, columns=grid.regions).groupby(day_key).sum().round().astype(int)
+        daily_df = daily_df.iloc[-366:]
+        daily_start = str(daily_df.index[0].date()) if len(daily_df) else None
+
         windows = {
             h: {
                 "active": [_iso(origin + pd.Timedelta(hours=h - 1)), _iso(origin + pd.Timedelta(hours=h))],
@@ -375,6 +387,7 @@ class ForecastEngine:
                     "history": {"start": _iso(hours[0]) if n72 else None,
                                 "hourly": [round(float(v), 3) for v in H[i, -n72:]]},
                     "hour_profile_28d": profile[r],
+                    "daily_minutes": {"start": daily_start, "values": daily_df[r].tolist()},
                 }
                 for i, r in enumerate(grid.regions)
             ],

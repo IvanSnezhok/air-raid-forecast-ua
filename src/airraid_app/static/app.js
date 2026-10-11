@@ -119,7 +119,24 @@ function regionData(id) {
   return { ...(fc || {}), ...(st || {}), probs: fc?.probs };
 }
 
+// threat types: yellow (drones) -> red (missiles, ballistic, KAB, massed drones)
+const LEVEL_UK = { yellow: "жовтий рівень", red: "червоний рівень" };
+const TYPE_PHRASE = { drone: "ударні дрони", massed_drone: "масована атака дронів", kab: "КАБи", missile: "крилаті ракети", ballistic: "балістика" };
+const typeMeta = (id) => S.forecast?.threats?.types.find((t) => t.id === id);
+function hexRgb(h) { h = h.replace("#", ""); return [0, 2, 4].map((j) => parseInt(h.slice(j, j + 2), 16)); }
+function levelColor(pRed) {
+  const a = hexRgb(css("--yel")), b = hexRgb(css("--alert"));
+  const t = Math.min(1, Math.max(0, pRed));
+  return `rgb(${a.map((v, k) => Math.round(v + (b[k] - v) * t)).join(",")})`;
+}
+const typeAt = (r) => r?.types?.[S.horizon];
+
 function tipHTML(r) {
+  if (S.layer === "forecast" && S.target === "type") {
+    const t = typeAt(r);
+    if (!t) return `<b>${esc(fullName(r))}</b><br>немає прогнозу типу`;
+    return `<b>${esc(fullName(r))}</b><br>${LEVEL_UK[t.level] || ""}: найімовірніше ${TYPE_PHRASE[t.most_likely] || ""}`;
+  }
   if (S.layer === "now") {
     const s = r.active ? `тривога ${r.since ? "вже " + duration(r.since) : ""}` : "тривоги немає";
     return `<b>${esc(fullName(r))}</b><br>${s}`;
@@ -141,6 +158,11 @@ function paintMap() {
     let p = null;
     if (r && S.layer === "now") {
       fill = r.active ? css("--alert") : css("--calm");
+    } else if (r && S.forecast && S.target === "type") {
+      const t = typeAt(r);
+      fill = t?.p_red == null ? css("--calm") : levelColor(t.p_red);
+      label = t?.most_likely ? typeMeta(t.most_likely)?.short : null;
+      p = t?.p_red > 0.75 ? 0.9 : 0;  // white text only on deep red
     } else if (r && S.forecast) {
       p = r.probs?.[S.target]?.[S.horizon];
       fill = p == null ? css("--calm") : rampColor(p);
@@ -167,6 +189,9 @@ function paintLegend() {
     lg.innerHTML = `<span><i class="sw" style="background:${css("--alert")}"></i>Тривога</span>
       <span><i class="sw" style="background:${css("--calm")}"></i>Немає тривоги</span>
       <span><i class="sw" style="background:repeating-linear-gradient(45deg,${css("--calm")} 0 3px,${css("--nodata")} 3px 6px)"></i>Немає даних (Крим, Луганщина)</span>`;
+  } else if (S.target === "type") {
+    lg.innerHTML = `<span>жовтий</span><span class="bar" style="background:linear-gradient(90deg,${levelColor(0)},${levelColor(0.5)},${levelColor(1)})"></span><span>червоний</span>
+      <span class="muted">жовтий: найімовірніше ударні дрони; червоний: ракети, балістика, КАБ або масована атака. Підпис: найімовірніший тип.</span>`;
   } else {
     const stops = [0, 0.2, 0.4, 0.6, 0.8, 1].map((p) => `${rampColor(p)} ${p * 100}%`).join(",");
     lg.innerHTML = `<span>0%</span><span class="bar" style="background:linear-gradient(90deg,${stops})"></span><span>100%</span>
@@ -196,9 +221,13 @@ function setupControls() {
 }
 
 function renderHorizonButtons() {
-  const hs = S.forecast?.horizons || [1, 2, 3, 6];
+  const typeMode = S.target === "type" && S.forecast?.threats;
+  const hs = typeMode ? S.forecast.threats.horizons : S.forecast?.horizons || [1, 2, 3, 6];
+  $('#target button[data-v="type"]').hidden = !S.forecast?.threats;
+  if (!hs.includes(S.horizon)) S.horizon = hs[0];
   const box = $("#horizon");
-  if (box.childElementCount === hs.length) return;
+  if (box.dataset.hs === hs.join(",")) return;
+  box.dataset.hs = hs.join(",");
   box.innerHTML = hs.map((h) => `<button data-v="${h}" aria-pressed="${h === S.horizon}">${h} год</button>`).join("");
 }
 
@@ -211,6 +240,10 @@ function windowText() {
   }
   const w = S.forecast?.windows?.[S.horizon];
   if (!w) return "";
+  if (S.target === "type") {
+    const o = S.forecast.threats?.origin;
+    return `Тип наступної тривоги протягом ${S.horizon} год${o ? `, прогноз на ${fmtTime.format(new Date(o.replace(" ", "T") + "Z"))}` : ""}`;
+  }
   const [a, b] = S.target === "active" ? w.active : w.onset;
   return S.target === "active"
     ? `Тривога в інтервалі ${fmtTime.format(new Date(a))}–${fmtTime.format(new Date(b))}`
@@ -279,7 +312,8 @@ function renderRank() {
   if (!fc) { t.innerHTML = ""; return; }
   const hs = fc.horizons;
   const active = new Set((S.state?.regions || []).filter((r) => r.active).map((r) => r.id));
-  const key = S.layer === "now" ? (r) => (active.has(r.id) ? 2 : 0) + r.probs.active[1] : (r) => r.probs[S.target][S.horizon];
+  const key = S.layer === "now" ? (r) => (active.has(r.id) ? 2 : 0) + r.probs.active[1]
+    : S.target === "type" ? (r) => r.types?.[S.horizon]?.p_red ?? -1 : (r) => r.probs[S.target][S.horizon];
   const rows = [...fc.regions].sort((a, b) => key(b) - key(a));
   const cell = (p) => `<span class="cell" style="background:${rampColor(p)};color:${invText(p) ? "#fff" : "inherit"}">${pct(p)}</span>`;
   t.innerHTML = `<thead><tr><th>Область</th>${hs.map((h) => `<th>Тривога в ${h}-у год</th>`).join("")}${hs.map((h) => `<th>Нова за ${h} год</th>`).join("")}</tr></thead>
@@ -319,8 +353,14 @@ function renderDetail(d) {
       <td>${bar(d.probs.active[h])}</td><td>${bar(d.probs.onset[h])}</td></tr>`).join("");
   const reg = S.metrics?.holdout?.by_region?.find((x) => x.region === d.name && x.target === "active" && x.horizon === 1);
   const h3 = hs.includes(3) ? 3 : hs[0];
-  const brief = `<div class="brief"><p>Тривога в наступну годину: ${level(d.probs.active[1])} ${pct(d.probs.active[1])}</p>
-    <p>Нова тривога протягом ${h3} год: ${level(d.probs.onset[h3])} ${pct(d.probs.onset[h3])}</p></div>`;
+  const LIKELY = ["малоймовірна", "можлива", "ймовірна", "дуже ймовірна"];
+  const pa = d.probs.active[1], po = d.probs.onset[h3];
+  const tt = d.types?.[3] || d.types?.[1];
+  const typeLine = tt?.most_likely
+    ? ` Якщо почнеться, найімовірніше це ${TYPE_PHRASE[tt.most_likely] || ""} (${LEVEL_UK[tt.level] || ""}).` : "";
+  const brief = `<div class="brief">
+    <p>Тривога в наступну годину ${LIKELY[levelIdx(pa)]}: ${level(pa)} ${pct(pa)}.</p>
+    <p>Нова тривога протягом ${h3} год ${LIKELY[levelIdx(po)]}: ${level(po)} ${pct(po)}.${typeLine}</p></div>`;
   const ver = d.verification?.active_h1 || [];
   const done = ver.filter((x) => x.y != null);
   const right = done.filter((x) => (x.p >= 0.5) === (x.y === 1)).length;
@@ -335,19 +375,44 @@ function renderDetail(d) {
     <p class="small muted">${S.state?.source === "alerts.in.ua" ? "Стан за alerts.in.ua" : "Стан на кінець датасету"}; прогноз станом на ${d.origin_kyiv} за Києвом.</p>
     <h3>Прогноз</h3>
     <table class="probs"><thead><tr><th></th><th>Тривога в цю годину</th><th>Нова тривога за цей час</th></tr></thead><tbody>${rows}</tbody></table>
+    ${typesHTML(d.types)}
     ${strip}
     <h3>Останні 72 години і прогноз</h3>
     <div id="ch-hist"></div>
     <div class="chart-legend"><span><i style="background:${css("--alert")}"></i>частка години під тривогою</span><span><i style="background:${rampColor(0.5)}"></i>прогноз: ймовірність тривоги</span></div>
+    ${d.daily_minutes?.values?.length ? `<h3>Календар тривог за рік</h3><div id="ch-cal"></div>
+    <p class="small muted">Кожна клітинка: доба за Києвом, колір: скільки часу область була під тривогою. Наведіть, щоб побачити дату.</p>
+    <h3>Дні тижня</h3><div id="ch-dow"></div>
+    <div class="chart-legend"><span><i style="background:${css("--alert")}"></i>останні 8 тижнів</span><span><i style="background:${css("--ink3")}"></i>за рік</span></div>
+    <p class="small muted">Частка днів з тривогою за кожним днем тижня.</p>` : ""}
+    <details class="more"><summary>Детальніше для фахівців</summary>
     <h3>Типова доба (останні 28 днів)</h3>
     <div id="ch-prof"></div>
     <p class="small muted">Частка днів, коли в цю годину за Києвом була тривога. Поточна година виділена.</p>
     ${d.holdout?.active_h1 ? `<h3>Як модель вгадувала минулого тижня</h3><div id="ch-ho"></div>
     <div class="chart-legend"><span><i style="background:${css("--alert-soft")};border:1px solid ${css("--alert")}"></i>тривога була</span><span><i style="background:${css("--accent")}"></i>прогноз на наступну годину</span></div>
-    ${reg ? `<p class="small muted">Для цієї області: ROC AUC ${num(reg.roc_auc, 2)}, Brier ${num(reg.brier, 3)}, покращення відносно кліматології ${signedPct(reg.bss_vs_clim)}.</p>` : ""}` : ""}`;
+    ${reg ? `<p class="small muted">Для цієї області: ROC AUC ${num(reg.roc_auc, 2)}, Brier ${num(reg.brier, 3)}, покращення відносно кліматології ${signedPct(reg.bss_vs_clim)}.</p>` : ""}` : ""}
+    </details>`;
+  if (d.daily_minutes?.values?.length) { calendarChart($("#ch-cal"), d.daily_minutes); dowChart($("#ch-dow"), d.daily_minutes); }
   histChart($("#ch-hist"), d);
   profileChart($("#ch-prof"), d.hour_profile_28d);
   if (d.holdout?.active_h1) holdoutChart($("#ch-ho"), d.holdout.active_h1);
+}
+
+function typesHTML(types) {
+  if (!types || !S.forecast?.threats) return "";
+  const hs = Object.keys(types).map(Number).sort((a, b) => a - b);
+  const block = (h) => {
+    const t = types[h];
+    const order = [...S.forecast.threats.types].sort((a, b) => (t.p_type[b.id] || 0) - (t.p_type[a.id] || 0));
+    return `<div class="types-h"><b>Протягом ${h} год</b>${t.level ? `<span class="lvl ${t.level}">${LEVEL_UK[t.level]}</span>` : ""}</div>
+      <table class="probs"><tbody>${order.map((m) => {
+        const p = t.p_type[m.id] || 0;
+        return `<tr><td style="width:46%">${esc(m.name_uk)}</td><td><div class="pbar"><div class="track"><div class="fill" style="width:${Math.round(p * 100)}%;background:${m.level === "red" ? css("--alert") : css("--yel")}"></div></div><span class="num">${pct(p)}</span></div></td></tr>`;
+      }).join("")}</tbody></table>`;
+  };
+  return `<h3>Тип загрози, якщо тривога почнеться</h3>${hs.map(block).join("")}
+    <p class="small muted">За повідомленнями Повітряних сил і історією тривог (окрема модель). Червоний рівень: ракети, балістика, КАБ, масована атака дронів.</p>`;
 }
 
 const signedPct = (v) => (v == null ? "–" : `${v > 0 ? "+" : ""}${Math.round(v * 100)}%`);
@@ -394,6 +459,71 @@ function histChart(box, d) {
   axisTicks(svg, pad.l, y(0), W, n, (i) => pad.l + i * bw, (i) => {
     const t = new Date(start.getTime() + i * 3600e3);
     return kyivHour(t) === 0 && i < hist.length ? fmtDay.format(t) : null;
+  });
+  box.appendChild(svg);
+}
+
+function calendarChart(box, daily) {
+  const vals = daily.values;
+  const sorted = vals.filter((v) => v > 0).sort((a, b) => a - b);
+  const top = sorted.length ? sorted[Math.floor(sorted.length * 0.9)] || sorted[sorted.length - 1] : 1;
+  const start = new Date(daily.start + "T12:00:00Z");
+  const dow0 = (start.getUTCDay() + 6) % 7; // Monday = 0
+  const weeks = Math.ceil((vals.length + dow0) / 7);
+  const cell = 6.2, gap = 1.2, padL = 16, padT = 12;
+  const W = padL + weeks * (cell + gap), Hh = padT + 7 * (cell + gap) + 2;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${Hh}`, class: "chart" });
+  ["пн", "", "ср", "", "пт", "", "нд"].forEach((l, i) => {
+    if (!l) return;
+    const t = el("text", { x: 0, y: padT + i * (cell + gap) + cell - 0.5, style: "font-size:6px" }, svg);
+    t.textContent = l;
+  });
+  let lastMonth = -1;
+  vals.forEach((m, i) => {
+    const k = i + dow0, w = Math.floor(k / 7), dd = k % 7;
+    const day = new Date(start.getTime() + i * 864e5);
+    const x = padL + w * (cell + gap), y = padT + dd * (cell + gap);
+    const r = el("rect", { x, y, width: cell, height: cell, rx: 1.2,
+      fill: m ? rampColor(Math.min(1, 0.12 + 0.88 * m / top)) : css("--surface2") }, svg);
+    const title = el("title", {}, r);
+    title.textContent = `${fmtDay.format(day)}: ${m ? `${Math.floor(m / 60)} год ${m % 60} хв під тривогою` : "без тривог"}`;
+    if (day.getUTCMonth() !== lastMonth && dd === 0) {
+      lastMonth = day.getUTCMonth();
+      const t = el("text", { x, y: 8, style: "font-size:6px" }, svg);
+      t.textContent = new Intl.DateTimeFormat("uk-UA", { month: "short" }).format(day);
+    }
+  });
+  box.appendChild(svg);
+}
+
+function dowChart(box, daily) {
+  const vals = daily.values;
+  const start = new Date(daily.start + "T12:00:00Z");
+  const share = (from) => {
+    const n = Array(7).fill(0), c = Array(7).fill(0);
+    vals.forEach((m, i) => {
+      if (i < from) return;
+      const dd = (new Date(start.getTime() + i * 864e5).getUTCDay() + 6) % 7;
+      c[dd] += 1; n[dd] += m > 0 ? 1 : 0;
+    });
+    return n.map((x, i) => (c[i] ? x / c[i] : 0));
+  };
+  const year = share(0), recent = share(Math.max(0, vals.length - 56));
+  const W = 360, Hh = 100, pad = { l: 26, r: 4, t: 6, b: 20 };
+  const svg = el("svg", { viewBox: `0 0 ${W} ${Hh}`, class: "chart" });
+  const gw = (W - pad.l - pad.r) / 7;
+  const y = (v) => pad.t + (1 - v) * (Hh - pad.t - pad.b);
+  for (const v of [0, 0.5, 1]) {
+    el("line", { x1: pad.l, x2: W - pad.r, y1: y(v), y2: y(v), class: "ax", "stroke-dasharray": v ? "2 3" : "" }, svg);
+    const t = el("text", { x: pad.l - 4, y: y(v) + 3, "text-anchor": "end" }, svg);
+    t.textContent = `${v * 100}%`;
+  }
+  ["пн", "вт", "ср", "чт", "пт", "сб", "нд"].forEach((l, i) => {
+    const x0 = pad.l + i * gw;
+    el("rect", { x: x0 + gw * 0.18, y: y(recent[i]), width: gw * 0.3, height: y(0) - y(recent[i]), fill: css("--alert"), rx: 1.5 }, svg);
+    el("rect", { x: x0 + gw * 0.52, y: y(year[i]), width: gw * 0.3, height: y(0) - y(year[i]), fill: css("--ink3"), rx: 1.5 }, svg);
+    const t = el("text", { x: x0 + gw / 2, y: Hh - 5, "text-anchor": "middle" }, svg);
+    t.textContent = l;
   });
   box.appendChild(svg);
 }
