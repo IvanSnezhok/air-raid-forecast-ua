@@ -116,7 +116,8 @@ def gdelt_window(start: pd.Timestamp, end: pd.Timestamp, query: str = GDELT_QUER
         raise RuntimeError(f"GDELT answered: {raw[:200]!r}")
     out = []
     for a in arts:
-        seen = pd.Timestamp(a["seendate"]).tz_localize("UTC") if a.get("seendate") else None
+        seen = pd.Timestamp(a["seendate"]) if a.get("seendate") else None  # "20261011T153000Z"
+        seen = None if seen is None else (seen.tz_localize("UTC") if seen.tzinfo is None else seen.tz_convert("UTC"))
         if seen is None or not a.get("url"):
             continue
         out.append({"source": "gdelt", "id": a["url"], "date": seen, "text": _clean(a.get("title"), 300),
@@ -131,15 +132,20 @@ def backfill_gdelt(root, days: float = 90, window_h: int = 3, max_minutes: float
     now = archive.now_utc().floor("h")
     start = pd.Timestamp(st["complete_until"]) if st.get("complete_until") else now - pd.Timedelta(days=days)
     t_end = time.time() + max_minutes * 60
-    n_total, n_win, saturated = 0, 0, st.get("saturated_windows", 0)
+    n_total, n_win, saturated, failures = 0, 0, st.get("saturated_windows", 0), 0
     while start < now - pd.Timedelta(hours=1) and time.time() < t_end:
         end = min(start + pd.Timedelta(hours=window_h), now)
         try:
             rows = gdelt_window(start, end)
+            failures = 0
         except Exception as e:
             st["last_error"] = repr(e)
             log(f"WARNING gdelt {start}: {e!r}")
-            break
+            failures += 1
+            if failures >= 5 or isinstance(e, (TypeError, ValueError, KeyError)):
+                break
+            time.sleep(120)
+            continue
         if len(rows) >= 250:
             saturated += 1
         df = pd.DataFrame(rows, columns=["source", "id", "date", "text", "edited", "seen_at", "domain"])
