@@ -54,6 +54,7 @@ env:
   AIRRAID_STORE: live-data
   AIRRAID_MODEL_DIR: var/models
   AIRRAID_DOWNLOAD: "0"  # the dataset is downloaded once per run, by its own step
+  AIRRAID_RAION_TRAIN: "0"  # [hook: raion layer] load raion models from <models>/raions, never train here
   SOURCE: ${{ inputs.source || github.event_name }}
   HOP: ${{ inputs.hop || '0' }}
 
@@ -102,13 +103,25 @@ jobs:
           path: var/models
           key: ${{ steps.key.outputs.prefix }}-${{ github.run_id }}
           restore-keys: ${{ steps.key.outputs.prefix }}-
-      - name: Check out the store (last 10 days)
+      # [hook: raion layer] its full raion model needs 28 days of store history: 31 days then
+      - name: Check out the store (last 10 days; 31 with the raion layer)
         id: store
-        run: STORE_DAYS=10 python3 scripts/pipeline.py timed checkout_store -- bash .github/scripts/live-data.sh checkout
-      - name: Download the volunteer dataset
+        run: |
+          STORE_DAYS=$([ -f src/airraid/raions.py ] && echo 31 || echo 10) \
+            python3 scripts/pipeline.py timed checkout_store -- bash .github/scripts/live-data.sh checkout
+      # [hook: raion layer] the official file stopped updating on 2026-09-07: cached under a fixed key
+      - name: "[optional] Official raion-level file (cached)"
+        if: hashFiles('src/airraid/raion_data.py') != ''
+        uses: actions/cache@v4
+        with:
+          path: data/raw/official_data_en.csv
+          key: official-data-en-v1
+      - name: Download the volunteer dataset (and, once, the official raion file)
         run: >-
           python3 scripts/pipeline.py timed dataset -- bash -c
-          'for i in 1 2 3; do python -c "from airraid.data import download; download()" && exit 0; sleep 10; done; exit 1'
+          'for i in 1 2 3; do python -c "from airraid.data import download; download()" && break; sleep 10; [ $i = 3 ] && exit 1; done;
+          if [ -f src/airraid/raion_data.py ] && [ ! -f data/raw/official_data_en.csv ]; then
+          python -c "from airraid.raion_data import download_official; download_official()"; fi'
       - name: Poll alerts.in.ua
         if: env.HAS_TOKEN == 'true'
         continue-on-error: true  # the forecast then uses the last stored poll (up to 1 h old)

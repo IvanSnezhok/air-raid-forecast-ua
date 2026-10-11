@@ -39,6 +39,9 @@ ROOT = Path(__file__).resolve().parents[1]
 API = "https://api.github.com"
 MODEL_FILES = ("src/airraid/data.py", "src/airraid/features.py", "src/airraid/models.py",
                "src/airraid/training.py", "reports/run_summary.json")
+# [hook: raion layer] hashed only when present: raion models live in the same cached bundle (<models>/raions)
+OPTIONAL_MODEL_FILES = ("src/airraid/raions.py", "src/airraid/raion_data.py", "src/airraid/raion_features.py",
+                        "src/airraid_app/raion_engine.py", "reports/raions/summary.json")
 STATUS_PATH = "_state/pipeline.json"  # in the live-data store
 SLOT_MIN, SLOT_OFFSET = 10, 3  # cron "3-59/10 * * * *": :03, :13, ... (off the busy top of the hour)
 
@@ -101,7 +104,7 @@ def dispatch(workflow: str, ref: str, inputs: dict | None = None) -> None:
 # ------------------------------------------------------------------ models key
 def models_key(root: Path = ROOT) -> str:
     h = hashlib.sha1()
-    for f in MODEL_FILES:
+    for f in MODEL_FILES + tuple(f for f in OPTIONAL_MODEL_FILES if (root / f).exists()):
         h.update(f.encode() + b"\0" + (root / f).read_bytes())
     return f"models-v2-{h.hexdigest()[:12]}"
 

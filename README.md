@@ -17,7 +17,7 @@ hour T:
 
 ```bash
 pip install -r requirements.txt
-python -m pytest            # leakage + verification tests (about 15 s)
+python -m pytest            # leakage, verification, pipeline and web app tests (about 1.5 min)
 python run.py               # full evaluation: model selection + 4-week walk-forward (about 30 min on 4 cores)
 python run.py --reuse-selection   # skip model selection, reuse reports/selection.json
 python predict_now.py       # live forecast for the next 6 hours (+ appends to the forecast log)
@@ -426,6 +426,24 @@ after 7 days unused, modelling code changed: the key contains its hash) the pipe
 trains once without the holdout, saves the bundle and asks the train job for a full
 one. A gate skips triggers that land within 5 minutes of the last update. The site
 shows "updated HH:MM" and a warning when its data is more than 30 minutes old.
+
+**Optional layers (hooks).** Steps marked `[optional]` / `[hook: ...]` in the workflows run
+only when the code they need exists, so the pipeline works before and after those layers
+land:
+
+* *Raion layer* (`src/airraid/raions.py` …): the official raion-level file is cached
+  under a fixed key (it stopped updating on 2026-09-07) and downloaded once; the store
+  checkout widens to 31 days (the full raion model needs 28 days of history); the raion
+  models are trained by the train job (`scripts/train_models.py --raions`) into
+  `<models>/raions`, which is cached and restored with the oblast bundle, and the model
+  cache key also hashes the raion code. Interface expected from
+  `airraid_app.raion_engine.RaionForecaster`: `save(dir)` / `load_saved(dir)` next to
+  `prepare()`; the static build loads them from `AIRRAID_RAION_MODEL_DIR` (default
+  `<AIRRAID_MODEL_DIR>/raions`), and `AIRRAID_RAION_TRAIN=0` (set by the pipeline) forbids
+  training inside the 10-minute run.
+* *Text signals* (`src/airraid/text/collect.py`): `.github/scripts/text-data.sh` updates
+  the `text-data` archive before the forecast and commits it after the run; the
+  threat-type step reads its posts from there when `predict_type_now.py --store` exists.
 
 **What the owner must configure**
 

@@ -42,8 +42,21 @@ jobs:
       - name: Model cache key
         id: key
         run: echo "prefix=$(python3 scripts/pipeline.py models-key)" >> "$GITHUB_OUTPUT"
-      - name: Train (holdout week, then the final refit)
-        run: python scripts/train_models.py --out var/models --threads 4
+      # [hook: raion layer] official file (fixed cache key: it stopped updating) and the store
+      # history the raion models train on; both only once src/airraid/raions.py exists
+      - name: "[optional] Official raion-level file (cached)"
+        if: hashFiles('src/airraid/raion_data.py') != ''
+        uses: actions/cache@v4
+        with:
+          path: data/raw/official_data_en.csv
+          key: official-data-en-v1
+      - name: "[optional] Store history for the raion models"
+        if: hashFiles('src/airraid/raions.py') != ''
+        run: |
+          STORE=live-data STORE_DAYS=60 bash .github/scripts/live-data.sh checkout
+          echo "AIRRAID_STORE=live-data" >> "$GITHUB_ENV"
+      - name: Train (holdout week, then the final refit; raion models when present)
+        run: python scripts/train_models.py --out var/models --threads 4 $([ -f src/airraid/raions.py ] && echo --raions)
       - name: Model info
         id: minfo
         run: python3 scripts/pipeline.py models-info --models var/models
