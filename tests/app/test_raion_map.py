@@ -13,7 +13,7 @@ from airraid.raion_data import OFFICIAL_PATH
 from airraid.raion_neighbours import NEIGHBOURS
 from airraid.raions import BY_ID, BY_UID, NO_DATA_OBLASTS, RAIONS, forecastable, from_alerts_in_ua, from_official
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 GEO = json.loads((ROOT / "src/airraid_app/static/raions-map.json").read_text(encoding="utf-8"))
 
 

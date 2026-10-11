@@ -13,7 +13,7 @@ alerts.in.ua location UID. The UIDs are the published alerts.in.ua location
 ids (also listed in the MIT-licensed alerts_in_ua Python client). Crimea is a
 single location in alerts.in.ua, so its raions have no UID.
 
-`tests/test_raions.py` checks that every raion of the official file and every
+`tests/app/test_raion_map.py` checks that every raion of the official file and every
 alerts.in.ua raion UID resolves to a row, and that every row has geometry.
 """
 from __future__ import annotations

@@ -15,9 +15,11 @@ Python-бекенд на FastAPI з веб-інтерфейсом. Показу�
 | `src/airraid_app/journal.py` | запис живих тривог і журнал виданих прогнозів для перевірки |
 | `src/airraid_app/threats.py` | читання прогнозу типу загрози (дрони / ракети / балістика, жовтий / червоний рівень) |
 | `src/airraid_app/live.py` | поточний стан: alerts.in.ua (якщо є токен) або стан на кінець датасету |
+| `src/airraid_app/raion_engine.py` | шар районів: хто під тривогою по районах, прогноз для кожного району і звідки він |
+| `src/airraid/raions.py`, `raion_data.py`, `raion_features.py` | реєстр районів (назви, alerts.in.ua UID), районна історія тривог, ознаки без витоку |
 | `src/airraid_app/api.py` | FastAPI: JSON API і роздача інтерфейсу |
-| `src/airraid_app/static/` | інтерфейс без збірки: HTML, CSS, JS, SVG-мапа областей |
-| `scripts/build_map.py` | генерує спрощену мапу з кордонів OpenStreetMap (результат уже в репозиторії) |
+| `src/airraid_app/static/` | інтерфейс без збірки: HTML, CSS, JS, SVG-мапи областей і районів |
+| `scripts/build_map.py` | генерує спрощені мапи: області з OpenStreetMap, райони з OCHA/HDX COD-AB (результат уже в репозиторії) |
 | `tests/app/` | тести API і рушія на синтетичних даних (офлайн, кілька секунд) |
 | `Dockerfile`, `render.yaml`, `deploy/huggingface/`, `.github/workflows/deploy-space.yml` | запуск у контейнері і безкоштовний хостинг |
 
@@ -53,11 +55,14 @@ docker run -p 7860:7860 -e ALERTS_IN_UA_TOKEN=... airraid
 | `GET /api/state` | хто під тривогою зараз, з якого часу, джерело (`alerts.in.ua` або `dataset`) |
 | `GET /api/forecast` | ймовірності `active` (тривога в N-у годину) і `onset` (нова тривога протягом N год) для всіх областей, часові вікна, попередження |
 | `GET /api/regions/{id}` | одна область: прогноз, погодинна історія за 72 год, типова доба за 28 днів, прогноз проти факту за відкладений тиждень |
+| `GET /api/raions` | 119 районів (118 + м. Київ): живий стан (`live`: вся область / район / частина району, громади), прогноз `active`/`onset` на 1-6 год, `method` для кожного значення, частка району (`share`), рівень даних (`tier`) |
+| `GET /api/raions/{id}` | один район: те саме плюс прогноз області для порівняння і якість методів на тесті (`evaluation`, з `reports/raions/`) |
 | `GET /api/threats` | тип загрози (дрони, масовані дрони, КАБ, ракети, балістика) і рівень жовтий/червоний на 1 і 3 год, якщо підключено `AIRRAID_TYPE_FORECAST` |
 | `GET /api/verification` | журнал виданих прогнозів проти факту: Brier проти кліматології, як часто справджувались прогнози ≥50% і <20% |
 | `GET /api/metrics` | якість на відкладеному тижні (LightGBM проти кліматології й персистентності), калібрування, по областях; і walk-forward з `reports/metrics_test.csv`, якщо `run.py` вже запускали |
 
-Ідентифікатори областей: `kyiv-city`, `kharkivska`, `lvivska`, ...
+Ідентифікатори областей: `kyiv-city`, `kharkivska`, `lvivska`, ... Районів: `kharkivskyi`,
+`chuhuivskyi`, `kamianets-podilskyi`, `kyiv-city`, ... (повний список у `src/airraid/raions.py`).
 
 ## Як рахується прогноз
 
@@ -99,6 +104,38 @@ docker run -p 7860:7860 -e ALERTS_IN_UA_TOKEN=... airraid
 * Фоновий потік оновлює живий стан щохвилини, датасет кожні 6 год і перенавчає
   моделі, коли дані посунулись на добу.
 
+## Райони
+
+![Райони під тривогою](img/app-raions-now.png)
+
+Перемикач **«Області / Райони»** показує мапу 136 районів (поділ 2020 року) з межами областей
+поверх. У шарі «Зараз» червоним позначено райони, де триває тривога на весь район або на всю
+область, смугами райони, де тривога лише в частині громад (з токеном alerts.in.ua; без нього живого
+стану по районах немає, і сторінка про це пише). Кнопка **«До тривог»** наближає мапу до районів
+під тривогою: до всіх або лише в області, обраній у списку поруч (у списку видно, скільки районів
+області під тривогою). **«Уся мапа»** повертає повний вигляд. У шарі «Прогноз» райони зафарбовано
+ймовірністю, а після наближення на них видно числа.
+
+![Деталі району](img/app-raion-detail.png)
+
+Клік по району (на мапі, у таблиці або пошуком за назвою) відкриває панель: чи триває тривога і з
+якого часу, які громади під тривогою, прогноз на 1, 2, 3 і 6 год і **звідки кожне число**:
+
+* **модель району**: LightGBM на районних даних, яка бачить, які райони під тривогою зараз і як довго,
+  стан інших районів області й сусідів, стан області за волонтерськими даними і час доби. Їй потрібен
+  лише живий стан районів (одне опитування alerts.in.ua), тому працює з токеном;
+* **модель району + історія**: те саме плюс районна історія за 28 днів; працює, коли сховище
+  `live-data` покриває останні 29 днів;
+* **область × частка району**: прогноз області, помножений на частку тривог області, які зачіпали
+  цей район за 28 днів; коли живих районних даних немає. Якщо частка оцінена давно, панель так і пише;
+* **прогноз області**: для м. Києва (одна одиниця) і коли районних даних немає зовсім.
+
+Що саме обирати для кожної ситуації, вирішує валідація в `raion_run.py`; панель показує ще й
+як цей метод спрацював на тесті (усі райони і райони цієї області). Числа і метод: README, розділ
+«Raion level». Посилання на район: `#raion/<id>`. Мапа і панель працюють на телефоні.
+
+![Райони на телефоні](img/app-raions-mobile.png)
+
 ## Тип загрози
 
 Окрема модель (`threat-type/`, PR #5) оцінює, яким буде наступна тривога: ударні дрони
@@ -126,6 +163,9 @@ docker run -p 7860:7860 -e ALERTS_IN_UA_TOKEN=... airraid
 | `AIRRAID_LIVE_REFRESH_S` | 60 | як часто питати alerts.in.ua |
 | `AIRRAID_DATA_REFRESH_H` / `AIRRAID_RETRAIN_H` | 6 / 24 | оновлення датасету / перенавчання |
 | `AIRRAID_LGB_THREADS` | кількість ядер | потоки LightGBM |
+| `AIRRAID_OFFICIAL_PATH` | `data/raw/official_data_en.csv` | «офіційний» файл тривог по районах (качається сам, якщо `AIRRAID_DOWNLOAD=1`) |
+| `AIRRAID_STORE` | – | шлях до чекауту гілки `live-data`: районна історія alerts.in.ua після 7 вересня 2026 |
+| `AIRRAID_RAION_MODELS` | `1` | навчати моделі районів (`0` на хостах з 512 МБ: тоді райони рахуються від прогнозу області) |
 
 ## Безкоштовний хостинг
 
@@ -149,17 +189,23 @@ docker run -p 7860:7860 -e ALERTS_IN_UA_TOKEN=... airraid
 ## Тести
 
 ```bash
-pytest tests/app          # API і рушій, синтетичні дані, офлайн
+pytest tests/app          # API і рушій, синтетичні дані, офлайн (у т.ч. шар районів)
 pytest tests/test_leakage.py   # перевірка на витік, качає датасет
+pytest tests/test_raion_leakage.py   # витік у районних ознаках, качає «офіційний» файл
 ```
 
-Мапа: © учасники OpenStreetMap (ODbL), кордони з github.com/EugeneBorshch/ukraine_geojson.
+Мапа областей: © учасники OpenStreetMap (ODbL), кордони з github.com/EugeneBorshch/ukraine_geojson.
+Мапа районів: OCHA/HDX COD-AB v05 (ДНВП «Картографія»), CC BY-IGO 3.0, див.
+`src/airraid_app/static/raions-map.LICENSE.txt`. UID районів alerts.in.ua: опубліковані alerts.in.ua
+(також у MIT-клієнті alerts_in_ua).
 
 ## Static site on GitHub Pages
 
 `python scripts/build_static_site.py site` runs the engine once and writes the UI
-plus precomputed `api/*.json` (state, forecast, regions, metrics, verification,
-threats) that replace the `/api/*` calls. The threat-type layer is hidden when
+plus precomputed `api/*.json` (state, forecast, regions, raions, metrics, verification,
+threats) that replace the `/api/*` calls. With `AIRRAID_STORE=<live-data checkout>` the
+raion layer also uses the alerts.in.ua history of the store; with `ALERTS_IN_UA_TOKEN` it
+shows the live raion state. The threat-type layer is hidden when
 `threat-type/reports/type_forecast_now.csv` is missing. The `pages.yml` workflow
 rebuilds and deploys it every 3 hours; enable it once in Settings -> Pages ->
 Source: GitHub Actions.

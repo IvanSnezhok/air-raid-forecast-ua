@@ -29,8 +29,8 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -62,7 +62,6 @@ TIERS = {
     "none": ["oblast_x_share", "oblast"],
 }
 MODEL_KINDS = ("lightgbm_state", "lightgbm")
-LEVEL_UK = {"oblast": "уся область", "raion": "увесь район", "hromada": "частина району (громади)"}
 
 
 @dataclass
@@ -80,7 +79,7 @@ def _get(a, key, attr=None):
     return a.get(key) if isinstance(a, dict) else getattr(a, attr or key, None)
 
 
-def raion_state(alerts, oblasts: set[str] | None = None) -> tuple[dict[str, RaionState], list[str]]:
+def raion_state(alerts) -> tuple[dict[str, RaionState], list[str]]:
     """Live alerts.in.ua records -> state of every forecastable raion, plus unmatched location titles.
 
     `alerts` is the raw `alerts` list of /v1/alerts/active.json (dicts) or
@@ -147,7 +146,9 @@ class RaionForecaster:
     # --------------------------------------------------------------- data
     def load(self, refresh: bool) -> None:
         path = self.s.official_path
-        if refresh:
+        # the official file stopped updating on 2026-09-07: refresh it at most once a day (31 MB)
+        stale = not path.exists() or time.time() - path.stat().st_mtime > 24 * 3600
+        if refresh and stale:
             try:
                 download_official(path)
             except Exception as e:  # keep the previous copy
