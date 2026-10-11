@@ -14,10 +14,6 @@ on:
       gdelt_days:
         description: "Also fetch GDELT news history for this many days back (0 = no)"
         default: "0"
-  # TEMPORARY: one GDELT history run from the feature branch (GDELT rate-limits the dev sandbox)
-  push:
-    branches: ["claude/dazzling-darwin-jlnlqj-text-signals"]
-    paths: [".github/workflows/text-collect.yml"]
 
 concurrency:
   group: text-data
@@ -45,11 +41,10 @@ jobs:
             git worktree add --orphan -b text-data text-data
           fi
       - name: Update (new posts and news)
-        if: github.event_name != 'push'
         run: PYTHONPATH=src python -m airraid.text.collect update --root text-data
       - name: GDELT news history
-        if: github.event_name == 'push' || (inputs.gdelt_days != '' && inputs.gdelt_days != '0')
-        run: PYTHONPATH=src python -m airraid.text.collect gdelt --root text-data --days "${{ inputs.gdelt_days || '90' }}" --max-minutes 150
+        if: inputs.gdelt_days != '' && inputs.gdelt_days != '0'
+        run: PYTHONPATH=src python -m airraid.text.collect gdelt --root text-data --days "${{ inputs.gdelt_days }}" --max-minutes 150
       - name: Status
         run: PYTHONPATH=src python -m airraid.text.collect status --root text-data
       - name: Commit to text-data
