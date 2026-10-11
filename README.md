@@ -33,6 +33,16 @@ python -m airraid.collect poll --root live-data      # what the collect workflow
 `ALERTS_IN_UA_TOKEN` environment variable only. The token is never stored in the repo
 or printed.
 
+Text signals (public Telegram channels, news), no account or key needed:
+
+```bash
+git worktree add text-data origin/text-data            # the point-in-time text archive
+PYTHONPATH=src python -m airraid.text.collect update --root text-data   # new posts + news, < 1 min
+PYTHONPATH=src python -m airraid.text.collect status --root text-data   # coverage, edited share
+python run.py --text-root text-data --text-only         # Telegram ablation -> reports/text_ablation.md
+python predict_now.py --text-root text-data             # live forecast with the Telegram model
+```
+
 ## Data
 
 * **Source:** the volunteer (eTryvoga) file of
@@ -50,6 +60,53 @@ or printed.
   elapsed time, so it can be applied identically in real time. About 5 % of records have
   an imputed end (`naive=True`, start + 30 min); they are kept.
 
+### Text signals: public Telegram channels and news
+
+The alert history cannot see launches, so I added what people in Ukraine actually read
+before an alert: the Air Force channel and volunteer "radar" channels, plus national
+news. Everything is collected without an account (`src/airraid/text/`), stored in a
+**point-in-time archive** on the `text-data` branch, and only text that was public
+before the forecast origin is used.
+
+| source | what it gives | history | in the model |
+|---|---|---|---|
+| [`kpszsu`](https://t.me/s/kpszsu) (Air Force, official) | "БпЛА курсом на …", ballistic threats, MiG-31K / Tu-95 take-offs, morning launch counts | 59,273 posts, complete from 2025-01-01 | yes |
+| [`deraketaua`](https://t.me/s/deraketaua) (volunteer radar) | drone tracks, strategic aviation status, launch reports | 33,017 posts, complete from 2025-01-01 | yes |
+| [`monitorwarr`](https://t.me/s/monitorwarr) (volunteer radar) | drone tracks, mostly Kyiv region | 15,531 posts, complete from 2025-01-01 | yes |
+| [`war_monitor`](https://t.me/s/war_monitor) (volunteer) | ballistic threats with launch area, drone vectors | 23,168 posts, complete from 2025-01-01 | yes |
+| [`raketa_trevoga`](https://t.me/s/raketa_trevoga) | mirror of the Air Force posts | live only: 99.6 % of posts are edited seconds after publishing (a footer), so the history cannot be timestamped | no |
+| RSS: Ukrinform, Ukrainska Pravda, UNIAN, RBC-Ukraine | attack-related headlines | live only (a feed holds the latest items only) | no (not enough history yet) |
+| GDELT DOC 2.0 API | attack-related headlines, crawl time | the API keeps 3 months, but it answers the dev sandbox and GitHub's shared runners with HTTP 429 most of the time: a 2.5-hour Actions run got 5 days (13-18 Jul 2026, 1,270 headlines) | no |
+
+Not used: `UkraineAlarmSignal` (445 k posts since 2025; it mirrors the official alerts,
+i.e. the target itself) and Suspilne's RSS (answers 403 to bots). The Kaggle "Massive
+Missile Attacks on Ukraine" file now downloads (the old fetcher sent a browser
+User-Agent, Kaggle answered with HTML), but nobody knows when each row appeared in it, so
+it is only used to check the parser of the Air Force morning summaries (correlation of
+nightly drone counts 0.92 over 554 nights); the model takes launch counts from the
+summaries themselves, which carry their publish time.
+
+**The archive** (`src/airraid/text/archive.py`): one JSONL record per post, partitioned
+by month, with `date` (publish time), `first_seen_at`, `last_seen_at`, `text_first`,
+`text_last`, `edited_first`, `edited_seen`, `collected_mode` (live / backfill). The
+first-seen text is never overwritten; later sightings only update the `*_last` fields.
+Each channel's `state.json` records the period for which we hold *every* post
+(`complete_from` .. `complete_until`) and any gaps.
+
+**When a text counts as public (`available_at`)**:
+
+| how we got it | `available_at` | why |
+|---|---|---|
+| post, not edited when we first saw it (live or backfill) | publish time | the text we hold is the original one |
+| post, already edited when we first saw it | first sighting | the web preview does not say when it was edited; the text we hold was public at the latest when we saw it. For backfilled posts this is after the whole test period, i.e. they are not used at all |
+| news from RSS | first sighting | publish times in feeds are claims (backdated, re-timed, headlines rewritten) |
+| news from GDELT | GDELT crawl time (`seendate`) | when the crawler saw it; never the claimed publish time |
+
+Edited when first seen (`edited_first`, archive status on 2026-10-11): kpszsu 2.7 %,
+deraketaua 29.2 %, monitorwarr 5.2 %, war_monitor 1.6 %, raketa_trevoga 99.6 %; 12,465 of
+the 130,989 posts of the four model channels are therefore not used. Posts deleted by a
+channel before our backfill are missing (a survivorship gap live collection does not have).
+
 ## Method
 
 **Features** (`src/airraid/features.py`), all computed from what is known at T:
@@ -65,6 +122,15 @@ or printed.
   neighbour map;
 * calendar: Kyiv local hour and day of week of the target hour; same-hour climatology
   over the last 7 / 28 days.
+* Telegram (`src/airraid/text/features.py`, only in `lightgbm_text`): posts naming the
+  oblast in the last 30 / 60 / 180 min, in total and by threat (drones, missiles,
+  ballistic, guided bombs, all-clear); minutes since the oblast was last named with a
+  threat; nationwide threat posts by class, how many oblasts were named in the last hour,
+  strategic bombers / MiG-31K take-offs, nationwide ballistic threats, launch reports,
+  "massed attack" wording, and the drone / missile counts of the latest morning summary.
+  One regex lexicon (`src/airraid/text/lexicon.py`) serves these features and the
+  threat-type labels. Origins outside the archive's coverage get NaN and
+  `tg_covered = 0`, never zeros.
 
 **Models** (`src/airraid/models.py`), one per target and horizon, pooled over regions:
 
@@ -76,6 +142,8 @@ or printed.
 | `logistic_regression` | all features, trained on the last 12 months |
 | `lightgbm_no_spatial` | gradient boosting without the national/spatial features (ablation) |
 | `lightgbm` | gradient boosting, all features |
+| `lightgbm_cov` | `lightgbm` trained only on origins from the start of the Telegram archive (2025-01-03): the fair baseline for the ablation |
+| `lightgbm_text` | `lightgbm_cov` + Telegram features, same rows, same folds |
 
 **Evaluation protocol** (`run.py`):
 
@@ -105,6 +173,15 @@ or printed.
   two leaks: a lag-0 feature, and "minutes since last alert ended" using the end of the
   running alert. Both made the test fail.
 * **Label test:** wiping all history before T must not change the labels.
+* **Text features** (`tests/test_text_leakage.py`, synthetic archive, runs in CI):
+  features at T recomputed from only the posts available before T must equal the
+  features from the whole archive (also for the sensitivity rules); a post published at
+  T, T + 1 min or T + 60 min changes nothing, one at T − 1 min does; turning the strict
+  `< T` window or "minutes since" into `<= T` makes the checks fail, and so does a
+  1-minute look-ahead (checked by hand); a post already edited when first seen counts
+  only from that sighting; the first-seen text is never overwritten; uncovered origins
+  and gaps are NaN; the live path and the evaluation path produce identical rows. The
+  truncation check was also run on the real archive at 25 random origins (identical).
 * **Label-not-a-feature test + guard:** see "What went wrong" below.
 
 ## Results (latest 4 weeks, walk-forward)
@@ -172,6 +249,59 @@ ROC-AUC of LightGBM: active 0.86 / 0.77 / 0.77 / 0.76, onset 0.78 / 0.80 / 0.81 
 Validation-month model selection preferred long training windows (all history or
 24 months) for almost every target. The 2022–2025 data still helps despite the 2026
 regime shift: twice as many alerts, shorter alerts.
+
+### With Telegram signals (ablation)
+
+`python run.py --text-root text-data --text-only` ([`reports/text_ablation.md`](reports/text_ablation.md),
+[`reports/text_sensitivity.md`](reports/text_sensitivity.md)). Same test weeks, rows and
+weekly folds as above. `lightgbm_cov` (alert history only) and `lightgbm_text` (+ Telegram)
+are trained on the same rows, origins from 2025-01-03 (the start of the Telegram archive)
+to each fold start minus the 6 h embargo; trees are chosen on the validation month for
+each model separately. Brier (skill vs climatology); Δ is text − history-only with a 95 %
+interval from a bootstrap over days (forecasts within a day are correlated):
+
+| target | h | lightgbm, all history (above) | lightgbm_cov | lightgbm_text | Δ Brier [95 % CI] | ROC-AUC cov → text |
+|---|---|---|---|---|---|---|
+| active | 1 | 0.1323 (+27.9 %) | 0.1321 (+28.0 %) | **0.1312** (+28.5 %) | −0.0009 [−0.0021, +0.0003] | 0.857 → 0.862 |
+| active | 2 | 0.1768 (+3.7 %) | 0.1765 (+3.9 %) | **0.1763** (+4.0 %) | −0.0002 [−0.0014, +0.0010] | 0.772 → 0.774 |
+| active | 3 | 0.1784 (+2.7 %) | **0.1778** (+3.1 %) | 0.1782 (+2.8 %) | +0.0005 [−0.0004, +0.0012] | 0.768 → 0.767 |
+| active | 6 | **0.1787** (+2.5 %) | 0.1790 (+2.3 %) | 0.1792 (+2.2 %) | +0.0002 [−0.0009, +0.0012] | 0.764 → 0.764 |
+| onset | 1 | 0.1462 (+4.7 %) | 0.1461 (+4.7 %) | **0.1449** (+5.5 %) | −0.0012 [−0.0024, +0.0000] | 0.779 → 0.788 |
+| onset | 2 | 0.1761 (+3.9 %) | 0.1759 (+4.1 %) | **0.1740** (+5.1 %) | −0.0018 [−0.0037, −0.0001] | 0.798 → 0.806 |
+| onset | 3 | 0.1756 (+3.4 %) | 0.1747 (+3.9 %) | **0.1730** (+4.9 %) | −0.0017 [−0.0039, +0.0006] | 0.815 → 0.821 |
+| onset | 6 | 0.1320 (+3.5 %) | 0.1317 (+3.7 %) | **0.1313** (+4.0 %) | −0.0004 [−0.0032, +0.0025] | 0.865 → 0.866 |
+
+![with vs without Telegram](reports/figures/text_ablation.png)
+
+**What this means, honestly**
+
+* Telegram helps **a little, and only for new alerts in the next 1-3 hours**: about 1 %
+  lower Brier, one more percentage point of skill over climatology (onset 1-3 h: +4.7 /
+  +4.1 / +3.9 % → +5.5 / +5.1 / +4.9 %), ROC-AUC +0.006-0.009. The 95 % interval
+  excludes zero only for onset at 2 h (at 1 h it touches zero). For "alert active in
+  hour 3 or 6" there is no gain: those depend on alerts that are already running.
+* It is not the breakthrough the README above hoped for ("alerts are driven by launches
+  the history cannot see"). The posts mostly arrive **when** the threat is announced:
+  Air Force posts naming an oblast are at the background rate until about an hour before
+  an alert there, 15-25 % above it in the last hour, and twice the background only in the
+  15 minutes right before the onset (sensitivity report, section 3). The few genuinely
+  early signals (bomber and MiG-31K take-offs, launch reports, the size of last night's
+  attack) carry some information but are rare. The most useful text features: minutes since the oblast was
+  last named with a threat, how many oblasts were named in the last hour, the latest
+  morning summary (how many drones last night, how long ago), minutes since the last
+  nationwide ballistic threat / take-off ([`reports/text_feature_importance.csv`](reports/text_feature_importance.csv)).
+  Text features take 16 % of the model's total gain.
+* Almost all of it comes from the Air Force channel; the three volunteer radar channels
+  add nothing measurable (sensitivity report, section 2).
+* Calibration stays as good as without text (reliability error ≤ 0.0012 for both;
+  [`reports/figures/text_reliability.png`](reports/figures/text_reliability.png)).
+* The edit rule: dropping posts that were already edited when we first saw them costs at
+  most 0.3-0.4 points of the improvement compared with a deliberately leaky variant that
+  uses them at publish time (sensitivity report, section 1).
+* **Served live:** the text model is used where it beat the history-only model on the
+  *validation* month: every target and horizon except `active` at 6 h (a rule fixed before
+  looking at the test weeks). On the test weeks those seven are also better than the
+  all-history model that served until now; for `active` at 6 h the history model stays.
 
 ## Live data
 
@@ -298,6 +428,15 @@ became known). Files are never rewritten, so git grows only by new rows.
 * `predict_now.py --as-of 2026-10-10T12:00` replays the live path at a past hour: data
   after that hour is dropped, store rows are used as they were known then, and models are
   retrained.
+* **Telegram model** (`--text-root text-data`, or `AIRRAID_TEXT_ROOT` for the web app):
+  before forecasting, the newest posts are fetched into the archive (and kept there),
+  the text features at the origin are built by the same code `run.py` evaluates, and the
+  history + Telegram model (`src/airraid/text/serving.py`, trained like `lightgbm_text`,
+  cached in `models/text/`) makes the forecast. If the fetch failed, the collection is
+  stale or has a gap at the origin, or the boosters do not match the features, the
+  history-only model serves instead. Which one served is in the forecast log (`model`),
+  in `reports/forecast_meta.json` (`model_served`, `text_status`) and in the API
+  (`model.served`, `model.text_status`).
 
 ## What went wrong along the way
 
@@ -317,6 +456,14 @@ became known). Files are never rewritten, so git grows only by new rows.
   Kharkivska and Dnipropetrovska "under alert" for weeks; the hourly run forecast 0.999 /
   0.000. Fixed by the measured definition and the training/feature split above, with
   regression tests (`tests/test_live_alerts.py`) that fail when the old merge is put back.
+* **Telegram text: three things that would have gone unnoticed.** (1) The first
+  backfill lost an hour of pages when a network error killed one channel's thread and
+  aborted the others; pages are now stored on every error and the run resumes. (2) The
+  serving code first gave the text model its columns in a different order than in
+  training; LightGBM takes columns by position, so the forecast would have been silently
+  wrong. A test now compares served probabilities with the training-order frame. (3) The
+  shared GDELT news API answered the dev sandbox and GitHub's runners with HTTP 429, and
+  a Cyrillic query returned nothing (GDELT searches its English translation).
 * **The first evaluation run hit the sandbox's 30-minute job limit** and lost its
   results. Model selection is now cached (`--reuse-selection`) and logistic regression
   trains on the last 12 months only.
@@ -328,8 +475,24 @@ became known). Files are never rewritten, so git grows only by new rows.
   alerts.in.ua records, which only approximate the volunteer channel (see "Live data").
 * The store starts on 2026-09-11; scheduled collection runs only once collect.yml is on
   the default branch.
-* No threat type: the alert data does not say *why* an alert was declared (drones,
-  missiles, ballistic). Telegram monitoring channels could add this; see `text-features/`.
+* The alert data itself does not say *why* an alert was declared; the Telegram features
+  add it only as regex-tagged mentions (`src/airraid/text/lexicon.py`). Known tagging
+  errors: "Дніпро" is also the river, Kyiv city vs Kyiv oblast are used loosely, a
+  past-tense mention counts like a live one.
+* Telegram history comes from the public web preview: posts the channels deleted before
+  the backfill are missing, and posts edited before we first saw them are dropped from
+  history (they count only from the moment we saw them). Live collection sees such posts
+  unedited at publish time, so live features count up to the edited share more posts than
+  the training data did (29 % for `deraketaua`, 2-5 % for the others); the permissive
+  sensitivity run bounds how much that matters.
+* Text features need the archive to be fresh at the forecast time: if the fetch fails
+  or the collector stopped, the forecast silently falls back to the history-only model
+  (and says so in `forecast_meta.json` / the API's `model.text_status`).
+* News is collected (RSS live from 2026-10-11; GDELT history where its rate limit allows)
+  but not used by the model: there is not enough history with trustworthy timestamps to
+  train and test on yet.
+* The web preview is a public page, not an API: Telegram can change its markup or rate
+  limits. The Telethon collector in `text-features/` is the fallback.
 * Oblast level only. Since December 2025 real alerts are often per district, so an
   oblast "alert" here means "an alert somewhere in the oblast".
 * Regime shifts (new attack tactics, seasons) are handled only by retraining.
@@ -343,8 +506,12 @@ run.py         evaluation pipeline → reports/
 predict_now.py live forecast + forecast log
 verify.py      forecast verification
 scripts/live_definition_check.py   live definition vs the training data
-tests/         leakage, live merge, store and verification tests
-reports/       metrics tables, figures, selection.json
+src/airraid/text/  Telegram and news: archive.py (point-in-time store) · telegram.py · news.py
+               lexicon.py · features.py · live.py · serving.py · collect.py (CLI)
+text-features/ optional Telethon collector writing the same archive
+tests/         leakage, live merge, store, verification and text-signal tests
+reports/       metrics tables, figures, selection.json, text_ablation.*
+branch text-data   the point-in-time text archive (JSONL per channel and month)
 ```
 
 Related work reviewed: Ddrakkx/alerts-forecast (MIT), lbgos/AirAlerts,
