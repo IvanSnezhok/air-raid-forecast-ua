@@ -20,15 +20,6 @@ on:
         description: "Also pull the month_ago history"
         type: boolean
         default: false
-  # TEMPORARY: run the one-off history backfill from the PR branch (the API only
-  # keeps ~30 days, so it cannot wait for the merge). Removed before merging.
-  push:
-    branches: [claude/dazzling-darwin-jlnlqj]
-    paths:
-      - ".github/workflows/collect.yml"
-      - ".github/scripts/live-data.sh"
-      - "src/airraid/collect.py"
-      - "src/airraid/store.py"
 
 permissions:
   contents: write
@@ -78,8 +69,7 @@ jobs:
     if: >-
       always() && needs.poll.outputs.ready == 'true' && (
       (github.event_name == 'schedule' && github.event.schedule == '41 2 * * *') ||
-      (github.event_name == 'workflow_dispatch' && inputs.history) ||
-      github.event_name == 'push')
+      (github.event_name == 'workflow_dispatch' && inputs.history))
     runs-on: ubuntu-latest
     timeout-minutes: 150
     concurrency:

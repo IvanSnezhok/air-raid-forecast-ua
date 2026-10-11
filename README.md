@@ -226,8 +226,9 @@ inputs rebuilt from each rule (`--model`; "state only": the running-alert featur
 | Sep 20 – Oct 11 2026, alerts.in.ua – state only | 0.1643 | 0.1726 | 0.1829 | 0.1776 | 0.1730 |
 | Sep 20 – Oct 11 2026, alerts.in.ua – all recent | 0.1643 | 0.2694 | 0.2071 | 0.1922 | **0.1825** |
 
-Expiries of 1, 2, 3, 6 and 12 h were tried; 1 h was best on the selection period and
-stays best on both later periods (2 h is a close second). Two honest caveats: the live
+Expiries of 1, 2, 3, 6 and 12 h were tried. On the selection period 1 h was best for
+"all recent" (0.1517 vs 0.1531 for 2 h) and within 0.0001 of the best (2 h) for "state
+only"; it is the best of the five on both later periods. Two honest caveats: the live
 rule is a noisy stand-in for the volunteer channel (active-1h Brier 0.19 vs 0.14 with
 the true volunteer state on the real feed), and on the real feed "state only" ties with
 "assume calm" (oblast only), so most of the gain comes from filling the gap. The volunteer

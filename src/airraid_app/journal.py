@@ -3,10 +3,10 @@
 * `LiveRecorder` turns the minute-by-minute alerts.in.ua polls into oblast-level
   alert intervals with the training data's definition (airraid.live_alerts:
   latest activation, ended by an all-clear for any part of the oblast or after
-  LIVE_EXPIRY_HOURS without a new activation). They fill the gap between the end of the volunteer
-  dataset (updated about once a day) and now, both for the forecast features
-  and for checking past forecasts. Each row keeps `observed_at`, the poll that
-  established it.
+  LIVE_EXPIRY_HOURS without a new activation). They fill the gap between the
+  end of the volunteer dataset (updated about once a day) and now, both for
+  the forecast features and for checking past forecasts. Each row keeps
+  `observed_at`, the poll that established it.
 * `ForecastJournal` stores every forecast the service issued, so it can later be
   compared with what actually happened (`ForecastEngine.verification`).
 """
