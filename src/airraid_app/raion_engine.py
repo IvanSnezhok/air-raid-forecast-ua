@@ -177,6 +177,13 @@ class RaionForecaster:
                 ev["by_oblast"] = pd.read_csv(d / "by_oblast.csv").replace({np.nan: None}).to_dict("records")
         except (OSError, ValueError):
             pass
+        try:  # raion_latest.py: the latest weeks, alerts.in.ua labels (methods without raion history)
+            L = pd.read_csv(d / "latest_metrics.csv")
+            ev["latest"] = {"test": json.loads((d / "latest_summary.json").read_text()).get("test")
+                            if (d / "latest_summary.json").exists() else None,
+                            "scores": L.replace({np.nan: None}).to_dict("records")}
+        except (OSError, ValueError):
+            pass
         return sel, ev
 
     def evaluation_for(self, oblast: str) -> dict | None:
@@ -185,10 +192,13 @@ class RaionForecaster:
         if not ev:
             return None
         keep = ("target", "horizon_h", "model", "brier", "bss_vs_clim", "roc_auc", "base_rate")
+        latest = ev.get("latest")
         return {
             "test": ev.get("test"),
             "scores": [{k: r.get(k) for k in keep} for r in ev.get("scores", [])],
             "oblast": [r for r in ev.get("by_oblast", []) if r.get("oblast") == oblast],
+            "latest": None if not latest else {"test": latest.get("test"),
+                                               "scores": [{k: r.get(k) for k in keep} for r in latest["scores"]]},
         }
 
     def chosen(self, t: str, h: int, tier: str) -> list[str]:

@@ -1064,10 +1064,23 @@ function renderRaionDetail(d) {
         <td class="${r.bss_vs_clim > 0 ? "pos" : "neg"}">${signedPct(r.bss_vs_clim)}</td><td>${o ? signedPct(o.bss_vs_clim) : "–"}</td></tr>` : "";
     };
     const obl = (ev.oblast || []).find((x) => x.target === "onset" && x.horizon_h === 3);
+    const lt = ev.latest;
+    const lget = (t, h, m) => lt?.scores?.find((x) => x.target === t && x.horizon_h === h && x.model === m);
+    const lline = (t, h) => {
+      const m = d.method[t][h], r = lget(t, h, m), o = lget(t, h, "oblast");
+      return r ? `<tr><td>${t === "active" ? `Тривога в ${h}-у год` : `Нова за ${h} год`}</td><td>${tag(m)}</td>
+        <td class="${r.bss_vs_clim > 0 ? "pos" : "neg"}">${signedPct(r.bss_vs_clim)}</td><td>${o ? signedPct(o.bss_vs_clim) : "–"}</td></tr>` : "";
+    };
+    const latestRows = lt ? ["active_1", "onset_1", "onset_3", "onset_6"].map((k) => lline(k.split("_")[0], Number(k.split("_")[1]))).join("") : "";
+    const latestHTML = latestRows ? `<p class="small muted">Найсвіжіші тижні${lt.test ? ` (${fmtDay.format(new Date(lt.test[0]))} – ${fmtDay.format(new Date(lt.test[1]))})` : ""},
+      факт за історією alerts.in.ua:</p>
+      <div class="tablewrap"><table class="mt"><thead><tr><th></th><th>Метод</th><th>Перевага</th><th>Прогноз області</th></tr></thead>
+      <tbody>${latestRows}</tbody></table></div>` : "";
     evHTML = `<h3>Наскільки цьому можна вірити</h3>
       <p class="small muted">Перевірка на ${per} (останні 4 тижні з районними даними), усі райони разом. Перевага над кліматологією району за Brier score:</p>
       <div class="tablewrap"><table class="mt"><thead><tr><th></th><th>Метод</th><th>Перевага</th><th>Прогноз області</th></tr></thead>
       <tbody>${line("active", 1)}${line("onset", 1)}${line("onset", 3)}${line("onset", 6)}</tbody></table></div>
+      ${latestHTML}
       ${obl && obl[`bss_${evalName(d.method.onset[3])}`] !== undefined ? `<p class="small muted">Райони ${esc(oblGen(d))}, нова тривога за 3 год: частота ${pct(obl.base_rate)}, перевага
         ${signedPct(obl[`bss_${evalName(d.method.onset[3])}`])} (метод «${METHOD_SHORT[d.method.onset[3]]}»).</p>` : ""}`;
   }

@@ -210,6 +210,10 @@ def main():
             by_obl.append(row)
     M = pd.DataFrame(rows)
     M.to_csv(REPORTS / "latest_metrics.csv", index=False)
+    (REPORTS / "latest_summary.json").write_text(json.dumps({
+        "test": [str(test_start), str(test_end)], "data_end": str(data_end), "store_spans": [[str(a), str(b)] for a, b in hist.spans],
+        "units": int(P["raion"].nunique()), "forecasts_per_target_horizon": int(len(P) // (2 * len(HORIZONS))),
+    }, indent=2))
     pd.DataFrame(by_obl).round(4).to_csv(REPORTS / "latest_by_oblast.csv", index=False)
     with open(REPORTS / "latest_metrics.md", "w") as f:
         f.write(f"Raion-level test on the latest weeks (labels: alerts.in.ua history in the live store), "
