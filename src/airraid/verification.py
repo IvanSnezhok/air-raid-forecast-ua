@@ -24,27 +24,59 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from . import store
 from .data import build_grid
-from .live_alerts import gap_alerts, store_records
+from .live_alerts import LIVE_EXPIRY_HOURS, POLL_GAP, gap_alerts, store_records
 
 WINDOWS = (("24h", pd.Timedelta(hours=24)), ("7d", pd.Timedelta(days=7)))
+# A poll run that started after a gap knows nothing about alerts opened before it: a
+# window is verified from such a run only if it starts this long after the run began.
+LEAD_IN = pd.Timedelta(hours=LIVE_EXPIRY_HOURS)
+
+
+def poll_runs(store_root: Path, as_of: pd.Timestamp, since: pd.Timestamp) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    """Unbroken runs of polls (no gap over POLL_GAP) as (first poll, last poll)."""
+    polls = store.load(store_root, "polls", as_of=as_of, since=since)
+    if polls.empty:
+        return []
+    t = pd.Series(np.sort(pd.to_datetime(polls["observed_at"], utc=True).unique()))
+    run = (t.diff() > POLL_GAP).cumsum()
+    return [(r.iloc[0], r.iloc[-1]) for _, r in t.groupby(run)]
 
 
 def label_grid(alerts: pd.DataFrame, store_root: Path | None, now: pd.Timestamp):
-    """(grid, dataset_end): the alert record labels are read from.
+    """(grid, dataset_end, spans): the alert record labels are read from, and the spans
+    (lo, hi) in which a forecast window [origin, origin + h) can be scored.
 
     The dataset up to its last full hour; with a store, extended by oblast-level
-    alerts rebuilt from the store's records up to where the store is complete.
+    alerts rebuilt from the store's records: up to where the store is complete
+    since the dataset ended (history pulls, then unbroken polls), and inside any
+    later unbroken run of polls after a lead-in of LIVE_EXPIRY_HOURS (polls that
+    resume after an outage verify the windows they fully cover).
     """
     hist_end = alerts["start"].max()
     dataset_end = hist_end.floor("h")
+    spans = [(None, dataset_end)]
     if store_root is not None:
         rec, covered = store_records(store_root, now, hist_end)
-        if covered is not None and covered.floor("min") > dataset_end:
-            end = covered.floor("min")
+        if covered is not None and covered > dataset_end:
+            spans.append((None, covered))
+        spans += [(a + LEAD_IN, b) for a, b in poll_runs(store_root, now, hist_end - LEAD_IN) if b > a + LEAD_IN]
+        end = max(hi for _, hi in spans).floor("min")
+        if end > dataset_end:
             gap = gap_alerts(rec, end, alerts)
-            return build_grid(pd.concat([alerts, gap], ignore_index=True), data_end=end), dataset_end
-    return build_grid(alerts, data_end=dataset_end), dataset_end
+            return build_grid(pd.concat([alerts, gap], ignore_index=True), data_end=end), dataset_end, spans
+    return build_grid(alerts, data_end=dataset_end), dataset_end, spans
+
+
+def covered(origin: pd.Series, horizon: pd.Series, spans) -> np.ndarray:
+    """Is the window [origin, origin + horizon h) inside one of the spans?"""
+    o = pd.to_datetime(origin, utc=True)
+    end = o + pd.to_timedelta(horizon, unit="h")
+    ok = np.zeros(len(o), bool)
+    for lo, hi in spans:
+        ok |= ((end <= hi) & (True if lo is None else (o >= lo))).to_numpy()
+    return ok
 
 
 def outcomes(log: pd.DataFrame, grid) -> np.ndarray:
@@ -105,9 +137,9 @@ def verify(log: pd.DataFrame, alerts: pd.DataFrame, store_root: Path | None = No
            now: pd.Timestamp | None = None) -> tuple[pd.DataFrame, dict]:
     """Verified rows (with y, label_source) and the summary."""
     now = pd.Timestamp.now(tz="UTC") if now is None else now
-    grid, dataset_end = label_grid(alerts, store_root, now)
+    grid, dataset_end, spans = label_grid(alerts, store_root, now)
     log = log.copy()
-    log["y"] = outcomes(log, grid)
+    log["y"] = np.where(covered(log["origin"], log["horizon"], spans), outcomes(log, grid), np.nan)
     window_end = pd.to_datetime(log["origin"], utc=True) + pd.to_timedelta(log["horizon"], unit="h")
     log["label_source"] = np.where(window_end <= dataset_end, "dataset", "store")
     v = log.dropna(subset=["y"]).reset_index(drop=True)

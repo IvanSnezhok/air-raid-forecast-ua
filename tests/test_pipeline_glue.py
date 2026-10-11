@@ -14,11 +14,12 @@ spec.loader.exec_module(P)
 T = datetime(2026, 10, 11, 22, 7, 30, tzinfo=timezone.utc)
 
 
-def test_gate_runs_manual_and_push_always_and_skips_duplicates():
+def test_gate_runs_manual_push_keepalive_always_and_skips_duplicates():
     just_now = T - timedelta(minutes=2)
     assert P.gate_decision("push", "push", just_now, T)[0]
     assert P.gate_decision("workflow_dispatch", "manual", just_now, T)[0]
-    for event, source in (("schedule", "schedule"), ("workflow_dispatch", "keepalive"), ("workflow_dispatch", "pinger")):
+    assert P.gate_decision("workflow_dispatch", "keepalive", just_now, T)[0]  # the only trigger for its slot
+    for event, source in (("schedule", "schedule"), ("workflow_dispatch", "pinger")):
         assert not P.gate_decision(event, source, just_now, T)[0]  # second trigger for the same slot
         assert P.gate_decision(event, source, T - timedelta(minutes=8), T)[0]
         assert P.gate_decision(event, source, None, T)[0]

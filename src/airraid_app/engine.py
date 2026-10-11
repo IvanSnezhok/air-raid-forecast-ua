@@ -392,7 +392,7 @@ class ForecastEngine:
                 return self._verified[1]
         V = pit.load(root, "verification", since=since)
         cols = ["origin", "region", "target", "horizon"]
-        known = pd.to_datetime(V["verified_at"], utc=True).max() if len(V) else since
+        known = pd.to_datetime(V["verified_at"], utc=True).max() if len(V) else None
         if len(F):
             F = F.copy()
             F["origin"] = pd.to_datetime(F["origin"], utc=True)

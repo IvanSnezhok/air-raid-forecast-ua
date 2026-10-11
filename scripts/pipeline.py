@@ -15,9 +15,9 @@ tests in tests/test_pipeline_glue.py.
 Why a keep-alive: GitHub's `schedule` is best effort. In this repository the
 hourly forecast cron fired twice in 14 hours and the 3-hourly Pages cron 48
 minutes late. The keep-alive is a bounded dead man's switch, not a loop: after
-a run it waits until the next 10-minute slot plus a grace period and dispatches
-the workflow only if nothing else (cron, an external pinger, a person) has
-started a newer run by then. Chains of keep-alive runs stop after
+every run (also one the gate skipped) it waits until the next 10-minute slot
+plus a grace period and dispatches the workflow only if nothing else (cron, an
+external pinger, a person) has started a newer run by then. Chains of keep-alive runs stop after
 PIPELINE_KEEPALIVE_MAX_HOPS hops (default 72, about 12 hours) and restart only
 from a real trigger; the repository variable PIPELINE_KEEPALIVE=off disables it.
 """
@@ -121,10 +121,11 @@ def cmd_models_info(a) -> None:
 # ------------------------------------------------------------------------ gate
 def gate_decision(event: str, source: str, last_update: datetime | None, now: datetime,
                   min_gap: timedelta = timedelta(minutes=5)) -> tuple[bool, str]:
-    """Run or skip. Manual runs and pushes always run; scheduled, keep-alive and pinger
+    """Run or skip. Manual, push and keep-alive runs always run (a keep-alive dispatch
+    happens only when nothing else started a run for the slot); scheduled and pinger
     runs are skipped when another run finished less than `min_gap` ago (two triggers
-    for the same slot)."""
-    if event == "push" or (event == "workflow_dispatch" and source in ("", "manual")):
+    for the same slot). A skipped run still carries the keep-alive."""
+    if event == "push" or (event == "workflow_dispatch" and source in ("", "manual", "keepalive")):
         return True, f"{event} ({source or 'manual'}): always runs"
     if last_update is None:
         return True, "no previous run recorded"
@@ -293,7 +294,7 @@ def keepalive_decision(enabled: bool, hop: int, max_hops: int, newer_runs: list[
         return False, f"chain of {hop} keep-alive runs reached the limit {max_hops}; waiting for cron, the pinger or a person"
     if newer_runs:
         r = newer_runs[0]
-        return False, f"a newer run exists ({r.get('event')}, {r.get('status')}): the schedule is working"
+        return False, f"a newer run exists ({r.get('event')}, {r.get('status')}): another trigger has the next slot"
     return True, "no newer run since this one started"
 
 
@@ -301,7 +302,7 @@ def cmd_keepalive(a) -> None:
     enabled = os.environ.get("KEEPALIVE", "on").strip().lower() not in ("off", "false", "0", "no")
     ref = os.environ["GITHUB_REF_NAME"]
     on_default = ref == (os.environ.get("DEFAULT_BRANCH") or "main")
-    max_hops = int(os.environ.get("MAX_HOPS") or (72 if on_default else 1))
+    max_hops = int(os.environ.get("MAX_HOPS") or (72 if on_default else 18))  # TEMPORARY 18 for branch test runs; 1 before merge
     hop = int(os.environ.get("HOP") or 0)
     ok, why = keepalive_decision(enabled, hop, max_hops, [])
     if not ok:
@@ -317,7 +318,7 @@ def cmd_keepalive(a) -> None:
     target = next_slot(utcnow()) + timedelta(minutes=a.grace)
     print(f"keep-alive: waiting until {target:%H:%M:%S}Z for the next slot (+{a.grace} min grace)")
     while (left := (target - utcnow()).total_seconds()) > 0:
-        time.sleep(min(60.0, left))
+        time.sleep(min(20.0, left))
         if n := newer():
             notice(f"keep-alive: {keepalive_decision(enabled, hop, max_hops, n)[1]}")
             return
@@ -330,6 +331,7 @@ def cmd_keepalive(a) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
+    sys.stdout.reconfigure(line_buffering=True)  # progress lines appear in the Actions log as they happen
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("models-key")

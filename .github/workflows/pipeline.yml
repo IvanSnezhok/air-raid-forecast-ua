@@ -16,8 +16,9 @@
 #     caps the chain, default 72 = about 12 h);
 #   * workflow_dispatch: by hand (always runs) or by an external pinger with
 #     source=pinger (README: cron-job.org), the most reliable option.
-# A scheduled / keep-alive / pinger run that comes less than 5 minutes after the
-# previous update is skipped by the gate job, so overlapping triggers cost ~10 s.
+# A scheduled or pinger run that comes less than 5 minutes after the previous update
+# is skipped by the gate job (overlapping triggers cost a few seconds); keep-alive
+# dispatches always run.
 #
 # Secrets: ALERTS_IN_UA_TOKEN (without it the forecast is made as of the end of the
 # volunteer dataset). Settings -> Pages -> Source: GitHub Actions.
@@ -176,9 +177,11 @@ jobs:
       - id: deployment
         uses: actions/deploy-pages@v4
 
+  # Also after a run the gate skipped: that run was the newest trigger, so the previous
+  # run's keep-alive has already stood down.
   keepalive:
     needs: [gate, run, deploy]
-    if: always() && needs.gate.outputs.go == 'true' && vars.PIPELINE_KEEPALIVE != 'off'
+    if: always() && vars.PIPELINE_KEEPALIVE != 'off'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

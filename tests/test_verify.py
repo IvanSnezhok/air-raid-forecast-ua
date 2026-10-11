@@ -81,3 +81,31 @@ def test_subhour_origins_are_scored_with_the_shifted_labels():
                          for i, r in enumerate(shifted.regions)]
     log = pd.DataFrame(rows)
     np.testing.assert_array_equal(outcomes(log, plain), log["expected"].to_numpy())
+
+
+def test_poll_runs_after_an_outage_verify_the_windows_they_cover(tmp_path):
+    """Polls that resume after a gap (no history pull since) verify windows that start at least
+    LIVE_EXPIRY_HOURS into the new run; windows touching the gap stay pending."""
+    from airraid import store
+    from verify import verify
+
+    T = pd.Timestamp("2026-10-11 04:36", tz="UTC")
+    alerts = pd.DataFrame({"region": ["Kharkivska oblast", "Lvivska oblast"] * 50,
+                           "start": [T - pd.Timedelta(hours=k) for k in range(100)], "naive": False})
+    alerts["end"] = alerts["start"] + pd.Timedelta(minutes=20)
+    m = lambda x: T + pd.Timedelta(minutes=x)  # noqa: E731
+    rec = {"uid": "122", "oblast": "Kharkivska oblast", "level": "raion", "started_at": m(320), "finished_at": pd.NaT,
+           "alert_type": "air_raid"}
+    for t in list(range(-10, 61, 10)) + list(range(180, 401, 10)):  # outage between +60 and +180 min
+        store.append(tmp_path, "polls", pd.DataFrame({"observed_at": [m(t)], "n_records": [int(320 <= t <= 340)]}))
+        if 320 <= t <= 340:
+            store.append(tmp_path, "alerts_active", pd.DataFrame([{**rec, "observed_at": m(t)}]))
+    log = pd.DataFrame([{"origin": m(o), "region": "Kharkivska oblast", "target": "active", "horizon": 1, "p": 0.5,
+                         "clim": 0.2, "issued_at": m(o)} for o in (30, 120, 190, 250, 345)])
+    v, summary = verify(log, alerts, tmp_path, now=m(401))
+    got = {int((r.origin - T) / pd.Timedelta(minutes=1)): r.y for r in v.itertuples()}
+    # +250: window 250-310 inside the new run (lead-in ends at 240); the alert at +320 is after it
+    assert got == {250: 0}
+    assert summary["pending"] == 4  # +30/+120 touch the outage, +190 is in the lead-in, +345 not over yet
+    v2, _ = verify(log.assign(horizon=2), alerts, tmp_path, now=m(401))
+    assert {int((r.origin - T) / pd.Timedelta(minutes=1)): r.y for r in v2.itertuples()} == {250: 1}  # 310-370 has it

@@ -383,20 +383,24 @@ twice. A 10-minute site cannot rely on it. The layers, from most to least reliab
 1. **External pinger** (recommended, needs the owner): cron-job.org calls the
    `workflow_dispatch` endpoint every 10 minutes with a fine-grained token that can only
    run Actions in this repository (step by step in `deploy/README.md`).
-2. **Keep-alive** (on by default): after each run the last job waits until the next slot
-   + 3 minutes and dispatches the workflow only if nothing (cron, pinger, a person) has
-   started a newer run by then. It is a dead man's switch, not a loop: each keep-alive
-   run is a normal ~5-minute pipeline run plus a wait of at most ~13 minutes, a chain of
-   keep-alive runs stops after `PIPELINE_KEEPALIVE_MAX_HOPS` (default 72, about 12 hours)
-   until a real trigger restarts it, and `PIPELINE_KEEPALIVE=off` disables it. While cron
-   is healthy it only waits a few minutes and exits.
+2. **Keep-alive** (on by default): after every run (also one the gate skipped as a
+   duplicate) a small job waits until the next slot + 3 minutes, checking every 20 s,
+   and dispatches the workflow only if nothing (cron, pinger, a person) has started a
+   newer run by then; as soon as a newer run appears it exits. It is a dead man's
+   switch, not a loop: runs never overlap (one concurrency group), a chain of runs
+   started only by the keep-alive stops after `PIPELINE_KEEPALIVE_MAX_HOPS` (default
+   72, about 12 hours) until a real trigger restarts it, and `PIPELINE_KEEPALIVE=off`
+   disables it. Verified on this branch: run 2 finished at 22:41, nothing else had
+   started a run by 22:46, the keep-alive dispatched run 3 at 22:46:01.
 3. **`schedule`** every 10 minutes at :03/:13/… (off the congested top of the hour).
 
 Terms: Actions minutes on standard runners are free and unlimited for public
 repositories, jobs are capped at 6 hours (ours: 30 minutes, the keep-alive 20), at most
 one pipeline run executes at a time, and the work is the project's own build, forecast
-and publication, which is what Actions is for. The keep-alive keeps one runner busy
-(mostly waiting) only while cron is failing; with the pinger it can be switched off.
+and publication, which is what Actions is for. The cost of the keep-alive is honest to
+state: while it is on, one runner is reserved between runs, mostly sleeping (about
+8 of every 10 minutes). With the external pinger configured it is not needed and should
+be switched off; that is the recommended setup.
 
 **Robustness.** The poll, threat-type and verification steps are `continue-on-error`
 (the forecast then uses the last stored poll; the site keeps the previous layer). The
