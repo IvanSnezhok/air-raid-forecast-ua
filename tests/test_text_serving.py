@@ -10,6 +10,7 @@ from airraid.data import build_grid
 from airraid.features import add_horizon_features, build_features, hourly_fraction, hourly_starts
 from airraid.models import GBM
 from airraid.text import archive
+from airraid.text import features as tf
 from airraid.text.serving import TextServing
 
 UA = {"Kyiv City": "Київ", "Kharkivska oblast": "Харків", "Lvivska oblast": "Львів", "Odeska oblast": "Одесу"}
@@ -66,6 +67,9 @@ def test_text_model_serves_when_covered_and_falls_back_otherwise(setup, monkeypa
     x = add_horizon_features(build_features(grid, np.array([k_cov]), H), grid, H, 1, S)
     p, served = text.predict(x, "onset", 1, rows, fallback)
     assert served == "lightgbm_text" and p.shape == (len(grid.regions),) and np.all((p > 0) & (p < 1))
+    # same probabilities as the frame built the way training builds it (column order matters)
+    as_trained = add_horizon_features(tf.attach(build_features(grid, np.array([k_cov]), H), rows), grid, H, 1, S)
+    np.testing.assert_allclose(p, text.models[("onset", 1)].predict(as_trained))
 
     # the archive stops 30 h before the end of the history: no text rows, history model serves
     k_late = grid.n_minutes // 60 - 1

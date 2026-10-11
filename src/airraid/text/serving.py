@@ -126,7 +126,9 @@ class TextServing:
         g = self.models.get((t, h))
         if g is not None and rows is not None:
             xt = tf.attach(x, rows)
-            if sorted(g.model.feature_name()) == sorted(feature_columns(xt) + ["region"]):
-                return g.predict(xt), "lightgbm_text"
+            names = [c for c in g.model.feature_name() if c != "region"]
+            if sorted(names) == sorted(feature_columns(xt)):
+                # LightGBM takes columns by position: use the order the booster was trained with
+                return g.predict(xt[["origin_hour", "region", *names]]), "lightgbm_text"
             log.warning("text model feature set changed since training; serving the history model")
         return fallback.predict(x), "lightgbm"
