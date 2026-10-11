@@ -87,6 +87,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--download", action="store_true")
     ap.add_argument("--targets", default=",".join(TARGETS))
+    ap.add_argument("--reuse-selection", action="store_true",
+                    help="skip step 1 and reuse reports/selection.json from a previous run")
     args = ap.parse_args()
     if args.download:
         download()
@@ -116,9 +118,12 @@ def main():
     # ---------- 1. model selection on the validation month ----------
     # Early stopping and the window choice both look at the validation month, so
     # validation scores are optimistic. The test month is never looked at here.
-    selection = {}
+    sel_path = REPORTS / "selection.json"
+    selection = json.loads(sel_path.read_text()) if args.reuse_selection and sel_path.exists() else {}
     for t in targets:
         for h in HORIZONS:
+            if f"{t}_h{h}" in selection:
+                continue
             df = data[h]
             val = between(df, grid, val_start, test_start)
             yv = val[f"y_{t}"].to_numpy()
@@ -134,6 +139,7 @@ def main():
                 if best is None or s["brier"] < best[0]:
                     best = (s["brier"], months, m.n_estimators)
             selection[f"{t}_h{h}"] = {"candidates": cands, "best_months": best[1], "best_trees": best[2]}
+            sel_path.write_text(json.dumps(selection, indent=2))
 
     # ---------- 2. walk-forward evaluation on the latest 4 weeks ----------
     preds, importances = [], []
@@ -154,8 +160,11 @@ def main():
                 out["y"] = te[f"y_{t}"].to_numpy()
                 out["clim_ref"] = te[clim_col].to_numpy()
                 out["target"], out["horizon"], out["fold"] = t, h, i
-                for model in (Climatology(clim_col), Persistence(pers_col), MarkovPersistence(), LogReg()):
+                for model in (Climatology(clim_col), Persistence(pers_col), MarkovPersistence()):
                     out[model.name] = model.fit(tr, ytr).predict(te)
+                # logistic regression: last 12 months only, it is the slowest model on ~1M rows
+                tr12 = window(df, grid, fs, 12)
+                out["logistic_regression"] = LogReg().fit(tr12, tr12[f"y_{t}"].to_numpy()).predict(te)
                 gbm = GBM(n_estimators=sel["best_trees"]).fit(tr, ytr)
                 out["lightgbm"] = gbm.predict(te)
                 importances.append(gbm.importance().rename(f"{t}_h{h}_f{i}"))
@@ -265,7 +274,9 @@ def _plots(P, M, R, imp, targets):
     fig, axes = plt.subplots(1, len(targets), figsize=(7 * len(targets), 6), squeeze=False)
     for ax, t in zip(axes[0], targets):
         h = 1 if t == "active" else 3
-        q = R[(R["horizon_h"] == h) & (R["target"] == t)].sort_values("bss_lgbm_vs_clim")
+        q = R[(R["horizon_h"] == h) & (R["target"] == t)]
+        # a region with (almost) no events in the test weeks makes the skill score meaningless
+        q = q[q["base_rate"].between(0.02, 0.98)].sort_values("bss_lgbm_vs_clim")
         ax.barh(q["region"], q["bss_lgbm_vs_clim"])
         ax.axvline(0, color="grey", lw=0.8)
         ax.set_xlabel(f"Brier skill score vs climatology ({t}, {h} h)")
