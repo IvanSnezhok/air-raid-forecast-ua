@@ -81,6 +81,9 @@ pip install -r requirements.txt beautifulsoup4
 python -m pytest -q threat-type/tests
 python threat-type/run_type.py --posts data/tg_kpszsu.parquet          # оцінка, звіти в threat-type/reports/
 python threat-type/predict_type_now.py --posts data/tg_kpszsu.parquet  # живий прогноз -> reports/type_forecast_now.csv
+# краще: брати пости з point-in-time архіву і дописувати туди свіжі (потім закомітити text-data)
+git worktree add text-data origin/text-data
+python threat-type/predict_type_now.py --store text-data
 ```
 
 `forecast.yml` щогодини запускає `predict_type_now.py` після основного прогнозу й кладе `type_forecast_now.csv` поруч зі сторінкою демо, щоб інтерфейс міг показати тип і колір на карті. Колонки: `region, horizon_h, p_drone, p_massed_drone, p_kab, p_missile, p_ballistic, p_red, level, most_likely` і, якщо є основний прогноз, `p_onset_<тип>`.
