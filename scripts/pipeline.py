@@ -40,8 +40,10 @@ API = "https://api.github.com"
 MODEL_FILES = ("src/airraid/data.py", "src/airraid/features.py", "src/airraid/models.py",
                "src/airraid/training.py", "reports/run_summary.json")
 # [hook: raion layer] hashed only when present: raion models live in the same cached bundle (<models>/raions)
+# [hook: text signals] likewise for the history + Telegram models (<models>/text)
 OPTIONAL_MODEL_FILES = ("src/airraid/raions.py", "src/airraid/raion_data.py", "src/airraid/raion_features.py",
-                        "src/airraid_app/raion_engine.py", "reports/raions/summary.json")
+                        "src/airraid_app/raion_engine.py", "reports/raions/summary.json",
+                        "src/airraid/text/features.py", "src/airraid/text/serving.py")
 STATUS_PATH = "_state/pipeline.json"  # in the live-data store
 SLOT_MIN, SLOT_OFFSET = 10, 3  # cron "3-59/10 * * * *": :03, :13, ... (off the busy top of the hour)
 
@@ -213,7 +215,9 @@ def build_status(now: datetime, timings: dict, forecast: dict, models: dict, ver
         "dataset_end": utc(forecast.get("history_ends_utc")),
         "record_complete_until": utc(forecast.get("record_complete_until_utc")),
         "model": {"trained_until": models.get("data_end"), "trained_at": models.get("trained_at"),
-                  "holdout": models.get("holdout_start") is not None, "code_version": models.get("code_version")},
+                  "holdout": models.get("holdout_start") is not None, "code_version": models.get("code_version"),
+                  # [hook: text signals] which model served this run's rows, and why (predict_now meta)
+                  "served": forecast.get("model_served"), "text_status": forecast.get("text_status")},
         "threat_type_origin": utc(threats.get("origin_utc")),
         "verification": {"n_verified": verification.get("n_verified"), "pending": verification.get("pending"),
                          "by_label_source": verification.get("n_verified_by_label_source"),

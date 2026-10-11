@@ -441,9 +441,14 @@ land:
   `prepare()`; the static build loads them from `AIRRAID_RAION_MODEL_DIR` (default
   `<AIRRAID_MODEL_DIR>/raions`), and `AIRRAID_RAION_TRAIN=0` (set by the pipeline) forbids
   training inside the 10-minute run.
-* *Text signals* (`src/airraid/text/collect.py`): `.github/scripts/text-data.sh` updates
-  the `text-data` archive before the forecast and commits it after the run; the
-  threat-type step reads its posts from there when `predict_type_now.py --store` exists.
+* *Text signals* (`src/airraid/text/`): `.github/scripts/text-data.sh` updates the
+  `text-data` archive before the forecast and commits it after the run (the pipeline is
+  then its one writer); the forecast step adds `--text-root text-data --text-no-fetch`
+  and the build gets `AIRRAID_TEXT_ROOT`; the train job trains the text models into
+  `<models>/text` (`python -m airraid.text.serving train`), cached with the bundle and
+  hashed into its key; `status.json` reports which model served (`model.served`,
+  `model.text_status`); the threat-type step reads its posts from the archive when
+  `predict_type_now.py --store` exists.
 
 **What the owner must configure**
 

@@ -132,9 +132,16 @@ jobs:
       - name: "[optional] Text signals: update the text-data archive"
         if: hashFiles('src/airraid/text/collect.py') != ''
         continue-on-error: true
-        run: python3 scripts/pipeline.py timed text_collect -- bash .github/scripts/text-data.sh update
+        run: |
+          python3 scripts/pipeline.py timed text_collect -- bash .github/scripts/text-data.sh update
+          echo "AIRRAID_TEXT_ROOT=text-data" >> "$GITHUB_ENV"  # the static build serves the same text model
       - name: Forecast (served models; no training unless none are compatible)
-        run: python3 scripts/pipeline.py timed forecast -- python predict_now.py --store "$STORE" --models "$AIRRAID_MODEL_DIR" --threads 4
+        # with the text archive: the history + Telegram model (text models from <models>/text), posts
+        # already fetched by the collector step
+        run: >-
+          python3 scripts/pipeline.py timed forecast -- python predict_now.py --store "$STORE"
+          --models "$AIRRAID_MODEL_DIR" --threads 4
+          $([ -d text-data ] && grep -q -- --text-root predict_now.py && echo --text-root text-data --text-no-fetch)
       - name: Model info
         id: minfo
         run: python3 scripts/pipeline.py models-info --models "$AIRRAID_MODEL_DIR"

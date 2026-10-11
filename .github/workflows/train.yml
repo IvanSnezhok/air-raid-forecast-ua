@@ -57,6 +57,13 @@ jobs:
           echo "AIRRAID_STORE=live-data" >> "$GITHUB_ENV"
       - name: Train (holdout week, then the final refit; raion models when present)
         run: python scripts/train_models.py --out var/models --threads 4 $([ -f src/airraid/raions.py ] && echo --raions)
+      # [hook: text signals] the history + Telegram models, cached in the same bundle (<models>/text)
+      - name: "[optional] Text models"
+        if: hashFiles('src/airraid/text/serving.py') != ''
+        continue-on-error: true  # the history-only bundle is published regardless
+        run: |
+          bash .github/scripts/text-data.sh checkout
+          PYTHONPATH=src python -m airraid.text.serving train --root text-data --model-dir var/models/text
       - name: Model info
         id: minfo
         run: python3 scripts/pipeline.py models-info --models var/models
