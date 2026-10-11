@@ -11,6 +11,8 @@
 * parity: run.py's path (whole archive) and the live path (recent partitions) give
   the same rows; row order matches build_features.
 """
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -267,3 +269,26 @@ def test_lexicon_edge_cases():
     s = classify("У ніч на 5 жовтня противник атакував 98 ударними БпЛА та 4 крилатими ракетами Х-101")
     assert s["summary"] and s["drones_reported"] == 98 and s["missiles_reported"] == 4
     assert classify("Зліт МіГ-31К")["platform"]
+
+
+ARCHIVE = Path(__file__).resolve().parents[1] / "text-data"
+
+
+@pytest.mark.skipif(not (ARCHIVE / "telegram" / "kpszsu").exists(), reason="no text-data checkout")
+def test_real_archive_truncation():
+    """The same truncation check on the real archive (run locally; CI has no archive)."""
+    from airraid.data import build_grid, load_alerts
+
+    grid = build_grid(load_alerts())
+    channels = ["kpszsu"]
+    posts = tf.load_posts(ARCHIVE, channels)
+    raw = archive.load(ARCHIVE, "telegram", channels)
+    rng = np.random.default_rng(7)
+    k0 = grid.minute(pd.Timestamp("2025-02-01", tz="UTC")) // 60
+    K = np.sort(rng.integers(k0, grid.n_minutes // 60, 4))
+    full = tf.build_text_features(grid.t0, K, grid.regions, posts)
+    for k in K:
+        T = grid.t0 + pd.Timedelta(hours=int(k))
+        cut = tf.classify_posts(raw[raw["available_at"] < T])
+        cut.attrs["coverage"] = posts.attrs["coverage"]
+        pd.testing.assert_frame_equal(_at(full, k), tf.build_text_features(grid.t0, np.array([k]), grid.regions, cut))
