@@ -1,6 +1,8 @@
 """Region names: dataset (English) names, Ukrainian labels, URL slugs, alerts.in.ua titles."""
 from __future__ import annotations
 
+from airraid.live_alerts import OBLAST_EN
+
 # Dataset region name -> Ukrainian label shown in the UI.
 UK_NAMES = {
     "Cherkaska oblast": "Черкаська", "Chernihivska oblast": "Чернігівська",
@@ -18,21 +20,8 @@ UK_NAMES = {
 }
 
 # alerts.in.ua `location_oblast` / `location_title` -> dataset region name.
-ALERTS_IN_UA = {
-    "Черкаська область": "Cherkaska oblast", "Чернігівська область": "Chernihivska oblast",
-    "Чернівецька область": "Chernivetska oblast", "Дніпропетровська область": "Dnipropetrovska oblast",
-    "Донецька область": "Donetska oblast", "Івано-Франківська область": "Ivano-Frankivska oblast",
-    "Харківська область": "Kharkivska oblast", "Херсонська область": "Khersonska oblast",
-    "Хмельницька область": "Khmelnytska oblast", "Кіровоградська область": "Kirovohradska oblast",
-    "м. Київ": "Kyiv City", "Київ": "Kyiv City", "Київська область": "Kyivska oblast",
-    "Луганська область": "Luhanska oblast",
-    "Львівська область": "Lvivska oblast", "Миколаївська область": "Mykolaivska oblast",
-    "Одеська область": "Odeska oblast", "Полтавська область": "Poltavska oblast",
-    "Рівненська область": "Rivnenska oblast", "Сумська область": "Sumska oblast",
-    "Тернопільська область": "Ternopilska oblast", "Вінницька область": "Vinnytska oblast",
-    "Волинська область": "Volynska oblast", "Закарпатська область": "Zakarpatska oblast",
-    "Запорізька область": "Zaporizka oblast", "Житомирська область": "Zhytomyrska oblast",
-}
+# Kept under the old name; the single source of truth is airraid.live_alerts.
+ALERTS_IN_UA = OBLAST_EN
 
 
 def uk_name(region: str) -> str:

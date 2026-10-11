@@ -1,0 +1,104 @@
+# Keep what alerts.in.ua reports, with the time we saw it, on the orphan branch
+# `live-data` (point-in-time store, see src/airraid/store.py):
+#   * every 10 min: one /v1/alerts/active.json poll -> alerts_active, polls
+#   * daily (and on demand): /month_ago history per oblast (+ raions when the
+#     oblast history lacks them) -> alerts_history. The API keeps only ~30 days,
+#     so anything not pulled within a month is lost for good.
+# All logic lives in `python -m airraid.collect`; this file only schedules it and
+# commits the result. Scheduled runs start once this file is on the default branch.
+#
+# Secret: ALERTS_IN_UA_TOKEN (the job is skipped without it). Never printed.
+name: collect
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+    - cron: "41 2 * * *"  # daily history pull
+  workflow_dispatch:
+    inputs:
+      history:
+        description: "Also pull the month_ago history"
+        type: boolean
+        default: false
+  # TEMPORARY: run the one-off history backfill from the PR branch (the API only
+  # keeps ~30 days, so it cannot wait for the merge). Removed before merging.
+  push:
+    branches: [claude/dazzling-darwin-jlnlqj]
+    paths:
+      - ".github/workflows/collect.yml"
+      - ".github/scripts/live-data.sh"
+      - "src/airraid/collect.py"
+      - "src/airraid/store.py"
+
+permissions:
+  contents: write
+
+env:
+  PYTHONPATH: src
+  STORE: live-data
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    concurrency:
+      group: collect-poll
+      cancel-in-progress: false
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check prerequisites
+        id: check
+        env:
+          HAS_TOKEN: ${{ secrets.ALERTS_IN_UA_TOKEN != '' }}
+        run: |
+          if [ "$HAS_TOKEN" = "true" ]; then echo "ready=true" >> "$GITHUB_OUTPUT"
+          else echo "::notice::Skipping: ALERTS_IN_UA_TOKEN secret is not set"; fi
+      - uses: actions/setup-python@v5
+        if: steps.check.outputs.ready == 'true'
+        with:
+          python-version: "3.12"
+      - if: steps.check.outputs.ready == 'true'
+        run: pip install -q pandas pyarrow
+      - name: Check out the data branch
+        if: steps.check.outputs.ready == 'true'
+        run: bash .github/scripts/live-data.sh checkout
+      - name: Poll active alerts
+        if: steps.check.outputs.ready == 'true'
+        env:
+          ALERTS_IN_UA_TOKEN: ${{ secrets.ALERTS_IN_UA_TOKEN }}
+        run: python -m airraid.collect poll --root "$STORE"
+      - name: Commit
+        if: steps.check.outputs.ready == 'true'
+        run: bash .github/scripts/live-data.sh commit "poll $(date -u +%FT%H:%MZ)"
+
+  history:
+    needs: poll
+    if: >-
+      always() && needs.poll.outputs.ready == 'true' && (
+      (github.event_name == 'schedule' && github.event.schedule == '41 2 * * *') ||
+      (github.event_name == 'workflow_dispatch' && inputs.history) ||
+      github.event_name == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    concurrency:
+      group: collect-history
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -q pandas pyarrow
+      - name: Check out the data branch
+        run: bash .github/scripts/live-data.sh checkout
+      - name: Pull history in chunks, committing after each
+        env:
+          ALERTS_IN_UA_TOKEN: ${{ secrets.ALERTS_IN_UA_TOKEN }}
+        run: |
+          for i in $(seq 1 12); do
+            python -m airraid.collect history --root "$STORE" --max-requests 15 | tee "$RUNNER_TEMP/history.log"
+            bash .github/scripts/live-data.sh commit "history $(date -u +%FT%H:%MZ)"
+            grep -q "^history: 0 requests" "$RUNNER_TEMP/history.log" && break
+          done

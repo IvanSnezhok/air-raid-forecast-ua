@@ -76,7 +76,8 @@ def create_app(settings: Settings | None = None, engine: ForecastEngine | None =
             "n_active": sum(s.active for s in live.regions.values()),
             "regions": [
                 {"id": slug(r), "name": r, "name_uk": uk_name(r), "active": s.active,
-                 "since": s.since.isoformat() if s.since is not None else None, "locations": s.locations}
+                 "since": s.since.isoformat() if s.since is not None else None, "locations": s.locations,
+                 "reported": s.reported}
                 for r, s in live.regions.items()
             ],
         }
