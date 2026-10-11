@@ -7,9 +7,11 @@ Used by predict_now.py and the web engine with a few lines each:
     rows, status = text.rows_now(grid, k_now)                      # fetch + features, or (None, reason)
     p, served = text.predict(x_now, target, h, rows, fallback=history_model)
 
-The text model is used only when (a) its boosters exist and were trained with the
-current feature set, and (b) the archive covers the origin (fresh fetch worked,
-no gap). Otherwise the history-only model serves, and `served` says which one did.
+The text model is used only when (a) it beat the history-only model on the
+validation month for that target and horizon (reports/text_selection.json), (b) its
+boosters exist and were trained with the current feature set, and (c) the archive
+covers the origin (fresh fetch worked, no gap). Otherwise the history-only model
+serves, and `served` says which one did.
 Training mirrors run.py's lightgbm_text: origins from text coverage on, labels
 fully observed before the history end, trees from reports/text_selection.json.
 """
@@ -46,10 +48,27 @@ class TextServing:
         self.meta: dict = {}
 
     # ---------------------------------------------------------------- models
-    def _trees(self) -> dict:
+    def _selection(self) -> dict:
         p = self.reports_dir / "text_selection.json"
-        sel = json.loads(p.read_text()) if p.exists() else {}
+        return json.loads(p.read_text()) if p.exists() else {}
+
+    def _trees(self) -> dict:
+        sel = self._selection()
         return {(t, h): int(sel.get(f"lightgbm_text|{t}_h{h}", {}).get("trees") or 300) for t in TARGETS for h in HORIZONS}
+
+    def enabled(self) -> set[tuple[str, int]]:
+        """Targets/horizons where the text model beat the history-only one on the validation month.
+
+        The rule is fixed before the test weeks are looked at (run.py's selection step);
+        elsewhere the history-only model serves. Without a selection file, all are enabled.
+        """
+        sel, out = self._selection(), set()
+        for t in TARGETS:
+            for h in HORIZONS:
+                txt, cov = sel.get(f"lightgbm_text|{t}_h{h}"), sel.get(f"lightgbm_cov|{t}_h{h}")
+                if txt is None or cov is None or txt["val_brier"] < cov["val_brier"]:
+                    out.add((t, h))
+        return out
 
     def load(self, hist_end: pd.Timestamp, max_age_h: float) -> bool:
         try:
@@ -123,7 +142,7 @@ class TextServing:
 
     def predict(self, x: pd.DataFrame, t: str, h: int, rows: pd.DataFrame | None, fallback: GBM):
         """P(event) from the text model when it can serve, else from `fallback`; plus the model's name."""
-        g = self.models.get((t, h))
+        g = self.models.get((t, h)) if (t, h) in self.enabled() else None
         if g is not None and rows is not None:
             xt = tf.attach(x, rows)
             names = [c for c in g.model.feature_name() if c != "region"]
@@ -132,3 +151,33 @@ class TextServing:
                 return g.predict(xt[["origin_hour", "region", *names]]), "lightgbm_text"
             log.warning("text model feature set changed since training; serving the history model")
         return fallback.predict(x), "lightgbm"
+
+
+def main(argv=None) -> int:
+    """Train the text models outside the forecast run (e.g. in a daily training job):
+
+        PYTHONPATH=src python -m airraid.text.serving train --root text-data --model-dir models/text
+    """
+    import argparse
+
+    from airraid.data import build_grid, load_alerts
+    from airraid.features import hourly_fraction, hourly_starts
+
+    ap = argparse.ArgumentParser(prog="python -m airraid.text.serving")
+    ap.add_argument("cmd", choices=["train"])
+    ap.add_argument("--root", required=True, help="text archive (text-data checkout)")
+    ap.add_argument("--model-dir", required=True)
+    ap.add_argument("--reports-dir", default=None, help="where text_selection.json is (default: reports/)")
+    ap.add_argument("--threads", type=int, default=2)
+    a = ap.parse_args(argv)
+    alerts = load_alerts()
+    hist_end = alerts["start"].max()
+    grid = build_grid(alerts, data_end=hist_end.floor("h"))
+    text = TextServing(a.root, a.model_dir, a.reports_dir, threads=a.threads, fetch=False)
+    text.train(grid, hourly_fraction(grid), hourly_starts(grid), hist_end)
+    print(f"trained {len(text.models)} text models on data up to {hist_end} -> {a.model_dir}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

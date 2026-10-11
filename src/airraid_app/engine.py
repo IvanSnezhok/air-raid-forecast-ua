@@ -91,6 +91,12 @@ class ForecastEngine:
         self.recorder = LiveRecorder(settings.state_dir / "live_alerts.csv")
         self.journal = ForecastJournal(settings.state_dir / "forecast_journal.parquet")
         self.threats = ThreatForecast(settings.type_forecast)
+        # history + Telegram model, served only when the text archive covers the origin
+        self.text = None
+        if settings.text_root:
+            from airraid.text.serving import TextServing
+            self.text = TextServing(settings.text_root, settings.model_dir / "text", settings.reports_dir,
+                                    threads=settings.lgb_threads)
 
     # ------------------------------------------------------------------ data
     def load_data(self, refresh: bool | None = None) -> None:
@@ -203,6 +209,9 @@ class ForecastEngine:
             "holdout_scores": rows,
         }
         self._save(models, meta, holdout)
+        if self.text is not None:
+            self._set("training", "Навчання моделі з Telegram-сигналами")
+            self.text.ensure_models(grid, H, S, data_end, self.s.retrain_h)
         with self.lock:
             self.models, self.meta, self.holdout = models, meta, holdout
             self._forecast = None
@@ -243,6 +252,8 @@ class ForecastEngine:
                 g.model = lgb.Booster(model_file=str(path))
                 g.regions = meta["regions"]
                 models[(t, h)] = g
+        if self.text is not None and not self.text.load(pd.Timestamp(meta["data_end"]), self.s.retrain_h):
+            return False  # retrain, the text model with it
         holdout = pd.read_parquet(d / "holdout.parquet") if (d / "holdout.parquet").exists() else pd.DataFrame()
         with self.lock:
             self.models, self.meta, self.holdout = models, meta, holdout
@@ -317,6 +328,8 @@ class ForecastEngine:
         H, S = hourly_fraction(grid), hourly_starts(grid)
         k_now = grid.n_minutes // 60
         base = build_features(grid, np.array([k_now]), H)
+        text_rows, text_status = (None, "off") if self.text is None else self.text.rows_now(grid, k_now)
+        served = set()
         probs = {r: {t: {} for t in TARGETS} for r in grid.regions}
         journal = []
         for h in HORIZONS:
@@ -327,7 +340,11 @@ class ForecastEngine:
                 got = feature_columns(x) + ["region"]
                 if sorted(expected) != sorted(got):
                     raise RuntimeError("feature set changed since the models were trained; retrain needed")
-                pred = model.predict(x)
+                if self.text is not None:
+                    pred, name = self.text.predict(x, t, h, text_rows, fallback=model)
+                else:
+                    pred, name = model.predict(x), "lightgbm"
+                served.add(name)
                 for r, p in zip(x["region"], pred):
                     probs[r][t][h] = round(float(p), 4)
                 journal.append(pd.DataFrame({
@@ -384,7 +401,8 @@ class ForecastEngine:
             "horizons": list(HORIZONS),
             "windows": windows,
             "warnings": warnings,
-            "model": {k: self.meta.get(k) for k in ("trained_at", "data_end", "selection_source")},
+            "model": {**{k: self.meta.get(k) for k in ("trained_at", "data_end", "selection_source")},
+                      "served": sorted(served), "text_status": text_status},
             "regions": [
                 {
                     "id": slug(r), "name": r, "name_uk": uk_name(r),

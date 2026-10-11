@@ -35,7 +35,7 @@ def setup(tmp_path_factory):
     d = tmp_path_factory.mktemp("text")
     alerts = synthetic_alerts()
     # few trees keep the test fast (the real counts come from run.py's selection)
-    sel = {f"lightgbm_text|{t}_h{h}": {"trees": 20} for t in ("active", "onset") for h in (1, 2, 3, 6)}
+    sel = {f"lightgbm_text|{t}_h{h}": {"trees": 20, "val_brier": 0.1} for t in ("active", "onset") for h in (1, 2, 3, 6)}
     (d / "text_selection.json").write_text(json.dumps(sel))
     # a post naming the region 20-40 minutes before most alert starts
     rng = np.random.default_rng(0)
@@ -79,6 +79,16 @@ def test_text_model_serves_when_covered_and_falls_back_otherwise(setup, monkeypa
     p, served = text.predict(x, "onset", 1, rows, fallback)
     assert served == "lightgbm"
     np.testing.assert_allclose(p, fallback.predict(x))
+
+    # where the text model lost on the validation month, the history model serves
+    sel = json.loads((d / "text_selection.json").read_text())
+    sel["lightgbm_text|onset_h1"]["val_brier"], sel["lightgbm_cov|onset_h1"] = 0.2, {"trees": 5, "val_brier": 0.1}
+    (d / "text_selection.json").write_text(json.dumps(sel))
+    rows, _ = text.rows_now(grid, k_cov)
+    x = add_horizon_features(build_features(grid, np.array([k_cov]), H), grid, H, 1, S)
+    assert text.predict(x, "onset", 1, rows, fallback)[1] == "lightgbm"
+    assert text.predict(add_horizon_features(build_features(grid, np.array([k_cov]), H), grid, H, 2, S),
+                        "onset", 2, rows, fallback)[1] == "lightgbm_text"
 
     # boosters are cached and reloaded
     again = TextServing(d, d / "models", reports_dir=d, fetch=False)

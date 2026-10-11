@@ -119,6 +119,7 @@ docker run -p 7860:7860 -e ALERTS_IN_UA_TOKEN=... airraid
 | `AIRRAID_STATE_DIR` | `var/state` | журнал прогнозів і запис живих тривог |
 | `AIRRAID_REPORTS_DIR` | `reports` | звідки читати `run_summary.json` і `metrics_test.csv` |
 | `AIRRAID_TYPE_FORECAST` | `threat-type/reports/type_forecast_now.csv`, якщо є | прогноз типу загрози (шлях або URL), напр. `https://ivansnezhok.github.io/air-raid-forecast-ua/type_forecast_now.csv` з GitHub Pages |
+| `AIRRAID_TEXT_ROOT` | не задано | checkout гілки `text-data` (архів Telegram, має бути доступний на запис): якщо архів покриває момент прогнозу, прогнозує модель з Telegram-сигналами, інакше модель лише на історії тривог; яка саме, видно в `/api/forecast` → `model.served`, `model.text_status` |
 | `AIRRAID_DOWNLOAD` | `1` | качати свіжий датасет при старті й оновленні |
 | `AIRRAID_TRAIN_MONTHS` / `AIRRAID_MAX_TRAIN_MONTHS` | 12 / 24 | вікно навчання |
 | `AIRRAID_TREES` | 300 | дерев на модель |
