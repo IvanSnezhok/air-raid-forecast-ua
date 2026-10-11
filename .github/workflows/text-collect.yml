@@ -1,0 +1,81 @@
+# Collect text signals (public Telegram channels via the t.me/s web preview, news
+# RSS, GDELT news history) into the point-in-time archive on the `text-data` branch.
+# All logic is in `python -m airraid.text.collect`; this file only schedules it,
+# so a single pipeline can call the same commands instead. Public sources only,
+# no secrets.
+name: text-collect
+
+on:
+  schedule:
+    # Hourly. `update` fetches only what is new and takes well under a minute.
+    - cron: "23 * * * *"
+  workflow_dispatch:
+    inputs:
+      gdelt_days:
+        description: "Also fetch GDELT news history for this many days back (0 = no)"
+        default: "0"
+  # TEMPORARY: one GDELT history run from the feature branch (GDELT rate-limits the dev sandbox)
+  push:
+    branches: ["claude/dazzling-darwin-jlnlqj-text-signals"]
+    paths: [".github/workflows/text-collect.yml"]
+
+concurrency:
+  group: text-data
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pandas pyarrow beautifulsoup4
+      - name: Check out the text-data branch
+        run: |
+          if git fetch origin text-data; then
+            git worktree add text-data FETCH_HEAD
+            git -C text-data checkout -B text-data
+          else
+            git worktree add --orphan -b text-data text-data
+          fi
+      - name: Update (new posts and news)
+        if: github.event_name != 'push'
+        run: PYTHONPATH=src python -m airraid.text.collect update --root text-data
+      - name: GDELT probe (TEMPORARY)
+        if: github.event_name == 'push'
+        run: |
+          PYTHONPATH=src python - <<'PY'
+          import time, pandas as pd
+          from airraid.text import news
+          end = pd.Timestamp.now(tz="UTC").floor("h"); start = end - pd.Timedelta(hours=6)
+          for q in (news.GDELT_QUERY, "(drone OR drones OR missile OR missiles OR ballistic OR shahed) sourcecountry:ukraine"):
+              try:
+                  rows = news.gdelt_window(start, end, q)
+                  print(len(rows), q); [print("  ", r["date"], r["text"][:100]) for r in rows[:5]]
+              except Exception as e:
+                  print("ERROR", q, repr(e))
+              time.sleep(6)
+          PY
+      - name: GDELT news history
+        if: github.event_name == 'push' || (inputs.gdelt_days != '' && inputs.gdelt_days != '0')
+        run: PYTHONPATH=src python -m airraid.text.collect gdelt --root text-data --days "${{ inputs.gdelt_days || '90' }}" --max-minutes 150
+      - name: Status
+        run: PYTHONPATH=src python -m airraid.text.collect status --root text-data
+      - name: Commit to text-data
+        run: |
+          cd text-data
+          git config user.name "github-actions[bot]"
+          git config user.email "41898729+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "text signals $(date -u +%FT%H:%MZ)" || exit 0
+          for i in 1 2 3; do
+            git push origin HEAD:text-data && exit 0
+            git pull --rebase -q origin text-data || true
+          done
+          exit 1
