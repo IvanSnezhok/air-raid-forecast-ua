@@ -205,8 +205,9 @@ class RaionForecaster:
         return [r for r in FORECAST_RAIONS if BY_ID[r].oblast in oblasts]
 
     def _plan(self, kind: str, t: str, h: int) -> tuple[int, int]:
+        """Training window (months, capped like the oblast models) and trees chosen by raion_run.py."""
         p = self.selection.get(f"{t}_h{h}", {}).get(kind, {})
-        return int(p.get("best_months") or 6), int(p.get("best_trees") or 200)
+        return min(int(p.get("best_months") or 6), self.s.max_train_months), int(p.get("best_trees") or 200)
 
     def _wanted(self, kind: str) -> bool:
         return any(m == kind for t in TARGETS for h in HORIZONS for tier in TIERS
@@ -226,7 +227,7 @@ class RaionForecaster:
             return
         end = min(hist.known_until() or now, now).floor("h")
         self._prepare_shares(vol_alerts, end)
-        for kind in MODEL_KINDS:
+        for kind in MODEL_KINDS if self.s.raion_models else ():
             if not self._wanted(kind):
                 continue
             if kind == "lightgbm" and not (hist.covered(end - pd.Timedelta(days=29), end) and now - end <= pd.Timedelta(hours=2)):

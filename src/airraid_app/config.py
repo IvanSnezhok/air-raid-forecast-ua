@@ -26,6 +26,9 @@ class Settings:
     # available, the live alert store written by the collector (airraid.store).
     official_path: Path = OFFICIAL_PATH
     store_dir: Path | None = None
+    # Train the raion models (a few hundred MB while training); off on 512 MB hosts:
+    # the raion layer then derives raion forecasts from the oblast forecast.
+    raion_models: bool = True
     # Threat-type forecast CSV (path or URL) from threat-type/predict_type_now.py; optional.
     type_forecast: str | None = None
     # Live alert state. Never commit the token; set it as an env var / secret.
@@ -58,12 +61,13 @@ class Settings:
             s.reports_dir = Path(v)
         if v := env.get("AIRRAID_OFFICIAL_PATH"):
             s.official_path = Path(v)
-        if v := env.get("AIRRAID_STORE_DIR"):
+        if v := env.get("AIRRAID_STORE") or env.get("AIRRAID_STORE_DIR"):  # same variable as predict_now.py
             s.store_dir = Path(v)
         s.alerts_token = env.get("ALERTS_IN_UA_TOKEN") or None
         local_types = ROOT / "threat-type" / "reports" / "type_forecast_now.csv"
         s.type_forecast = env.get("AIRRAID_TYPE_FORECAST") or (str(local_types) if local_types.exists() else None)
         s.download = _env_bool("AIRRAID_DOWNLOAD", s.download)
+        s.raion_models = _env_bool("AIRRAID_RAION_MODELS", s.raion_models)
         for name, attr, cast in (
             ("AIRRAID_TRAIN_MONTHS", "train_months", int),
             ("AIRRAID_MAX_TRAIN_MONTHS", "max_train_months", int),

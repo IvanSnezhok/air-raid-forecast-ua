@@ -50,8 +50,6 @@ OFFICIAL_URL = (
 OFFICIAL_PATH = RAW_PATH.parent / "official_data_en.csv"
 COLUMNS = ["region", "oblast", "start", "end", "level", "source"]
 FORECAST_RAIONS = [r.id for r in RAIONS if forecastable(r)]
-# Polls further apart than this leave the time between them unknown.
-MAX_POLL_GAP = pd.Timedelta(minutes=15)
 
 
 def download_official(path: Path = OFFICIAL_PATH, url: str = OFFICIAL_URL) -> Path:
@@ -145,81 +143,94 @@ def from_live_records(df: pd.DataFrame, source: str = "alerts.in.ua") -> pd.Data
     return _clean(out)
 
 
-def intervals_from_polls(polls: pd.DataFrame) -> pd.DataFrame:
-    """Polls of `/alerts/active.json` (one row per alert per poll, column observed_at) -> alert records.
+def _raion_titles(uids) -> list[str | None]:
+    """Raion title of each alerts.in.ua location UID (hromadas via the collector's location list)."""
+    try:
+        from .live_alerts import locations
+        loc = locations()
+    except Exception:  # noqa: BLE001 - the list ships with the live collector
+        return [None] * len(uids)
+    out = []
+    for u in uids:
+        u = None if u is None or (isinstance(u, float) and np.isnan(u)) else str(u)
+        ru = loc.at[u, "raion_uid"] if u in loc.index else ""
+        out.append(loc.at[ru, "title"] if ru in loc.index else (loc.at[u, "title"] if u in loc.index else None))
+    return out
 
-    An alert seen in consecutive polls is one record; it ended at the first poll
-    where it is missing. Polls more than MAX_POLL_GAP apart do not vouch for the
-    time between them, so the record ends at the last poll that saw it. An alert
-    still present in the latest poll is open (finished_at NaT, observed_until =
-    the latest poll).
+
+POLL_GAP = pd.Timedelta(minutes=30)  # as airraid.live_alerts: polls further apart break continuous coverage
+KEY = ["uid", "started_at", "alert_type"]
+
+
+def store_raion_records(root: Path, as_of: pd.Timestamp) -> tuple[pd.DataFrame, pd.Timestamp | None, pd.Timestamp | None]:
+    """Per-location alerts.in.ua records known at `as_of` and the span over which they are complete.
+
+    Same rules as `airraid.live_alerts.store_records` (written for the oblast
+    gap): history pulls as known at `as_of`; a record seen in one poll and
+    missing from the next is over by that next poll. Complete from 29 days
+    before the oldest of the latest pulls of all oblasts (each pull holds ~30
+    days) to that pull, then through polls without gaps > POLL_GAP.
+    Returns (records, since, covered_until); since/covered_until are None
+    when the store does not hold a complete span.
     """
-    if polls.empty:
-        return polls.assign(observed_until=pd.Series(dtype="datetime64[ns, UTC]"))
-    times = np.sort(polls["observed_at"].unique())
-    key = ["id"] if "id" in polls and polls["id"].notna().all() else ["uid", "title", "started_at"]
-    g = polls.sort_values("observed_at").groupby(key, dropna=False)
-    rec = g.last().reset_index()
-    last_seen = g["observed_at"].max().reset_index(drop=True).to_numpy()
-    nxt_idx = np.searchsorted(times, last_seen, "right")
-    latest = times[-1]
-    fin = []
-    for ls, i in zip(last_seen, nxt_idx):
-        if i >= len(times):
-            fin.append(pd.NaT)
-        else:
-            nxt = times[i]
-            fin.append(nxt if nxt - ls <= MAX_POLL_GAP else ls)
-    fin = pd.to_datetime(pd.Series(fin), utc=True)
-    rec["finished_at"] = rec["finished_at"].fillna(fin) if "finished_at" in rec else fin
-    rec["observed_until"] = pd.Timestamp(latest)
-    return rec
+    from . import store
+    from .live_alerts import OBLAST_UID
+
+    cols = ["oblast", "uid", "level", "started_at", "finished_at", "alert_type"]
+    hist = store.load(root, "alerts_history", as_of=as_of)
+    raw = store.load(root, "alerts_history", as_of=as_of, raw=True)
+    pulls = store.load(root, "history_pulls", as_of=as_of)
+    polls = store.load(root, "polls", as_of=as_of)
+    act = store.load(root, "alerts_active", as_of=as_of)
+    parts = [hist[hist["started_at"] < as_of][cols]] if len(hist) else []
+    t = pd.DatetimeIndex(pd.to_datetime(polls["observed_at"], utc=True).sort_values().unique()) if len(polls) else None
+    if len(act) and t is not None:
+        last = act.groupby(KEY, dropna=False).agg(oblast=("oblast", "last"), level=("level", "last"),
+                                                   seen=("observed_at", "max")).reset_index()
+        i = t.searchsorted(pd.DatetimeIndex(last["seen"]), side="right")  # first poll after the last sighting
+        last["finished_at"] = t.append(pd.DatetimeIndex([pd.NaT], tz="UTC"))[i]
+        parts.append(last[cols])
+    rec = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=cols)
+    if len(rec):
+        rec = rec.sort_values("finished_at", na_position="last").drop_duplicates(KEY, keep="first")
+    pulled = []
+    if len(pulls):
+        ok = pulls[pulls["status"].isin([200, 304])]
+        pulled.append(pd.Series(ok["fetched_at"].to_numpy(), index=ok["uid"].astype(str).to_numpy()))
+    if len(raw) and "requested_uid" in raw:
+        pulled.append(pd.Series(raw["fetched_at"].to_numpy(), index=raw["requested_uid"].astype(str).to_numpy()))
+    since = reach = None
+    if pulled:
+        last_pull = pd.concat(pulled).groupby(level=0).max()
+        need = {u for u, r in OBLAST_UID.items() if r not in NO_DATA_OBLASTS}
+        if need <= set(last_pull.index):
+            reach = pd.Timestamp(last_pull[list(need)].min())
+            since = reach - pd.Timedelta(days=29)
+    if t is not None and len(t):
+        runs = pd.Series(t).diff().gt(POLL_GAP).cumsum()
+        for _, r in pd.Series(t).groupby(runs.to_numpy()):
+            if reach is None:
+                since, reach = r.iloc[0], r.iloc[-1]  # polls only: complete over their latest run
+            elif r.iloc[0] <= reach + POLL_GAP and r.iloc[-1] > reach:
+                reach = r.iloc[-1]
+    return rec.reset_index(drop=True), since, reach
 
 
 def load_store(root: Path | None, as_of: pd.Timestamp | None = None) -> tuple[pd.DataFrame, list[tuple]]:
-    """Raion alerts and covered time spans from the live store (empty without it).
-
-    Uses airraid.store (append-only daily partitions written by the collector):
-    `alerts_history` (alerts.in.ua month_ago history, columns of
-    live_alerts.to_frame plus fetched_at) and `alerts_active` (polls, plus
-    observed_at). `as_of` restricts to rows written up to that moment.
-    """
+    """Raion alerts and the covered time span from the live store (empty without it)."""
     empty = pd.DataFrame(columns=COLUMNS), []
-    if root is None:
+    if root is None or not Path(root).exists():
         return empty
     try:
-        from . import store  # written by the live collector (separate module)
+        rec, since, covered = store_raion_records(Path(root), pd.Timestamp.now(tz="UTC") if as_of is None else as_of)
     except ImportError:
         return empty
-    frames, spans = [], []
-    try:
-        hist = store.load(root, "alerts_history", as_of)
-    except Exception as e:  # noqa: BLE001 - a missing/partial store must not break forecasting
-        log.info("no alerts_history in store: %s", e)
-        hist = pd.DataFrame()
-    if hist is not None and len(hist):
-        tcol = "fetched_at" if "fetched_at" in hist else "first_seen_at"
-        hist = hist.sort_values(tcol)
-        idcol = "id" if "id" in hist else None
-        latest = hist.drop_duplicates(idcol, keep="last") if idcol else hist
-        latest = latest.assign(observed_until=latest[tcol])
-        frames.append(from_live_records(latest, "alerts.in.ua history"))
-        # month_ago.json covers the 30 days before each fetch (29 to be safe)
-        spans.append((hist[tcol].min() - pd.Timedelta(days=29), hist[tcol].max()))
-    try:
-        polls = store.load(root, "alerts_active", as_of)
-    except Exception as e:  # noqa: BLE001
-        log.info("no alerts_active in store: %s", e)
-        polls = pd.DataFrame()
-    if polls is not None and len(polls):
-        frames.append(from_live_records(intervals_from_polls(polls), "alerts.in.ua polls"))
-        t = np.sort(polls["observed_at"].unique())
-        cut = np.flatnonzero(np.diff(t) > MAX_POLL_GAP) + 1
-        for a, b in zip(np.r_[0, cut], np.r_[cut, len(t)]):
-            spans.append((pd.Timestamp(t[a]), pd.Timestamp(t[b - 1])))
-    if not frames:
+    if not len(rec):
         return empty
-    return pd.concat(frames, ignore_index=True), spans
+    rec = rec.assign(title=None, raion=_raion_titles(rec["uid"].tolist()),
+                     observed_until=covered if covered is not None else rec["started_at"])
+    out = from_live_records(rec, "alerts.in.ua")
+    return out, ([(since, covered)] if since is not None and covered is not None and covered > since else [])
 
 
 def alerts_as_of(df: pd.DataFrame, as_of: pd.Timestamp) -> pd.DataFrame:

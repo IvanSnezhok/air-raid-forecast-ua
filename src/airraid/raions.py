@@ -193,8 +193,22 @@ OFFICIAL_ALIASES = {
 }
 _BY_NAME = {(r.oblast, r.name): r for r in RAIONS}
 
-# alerts.in.ua city locations that are not raions: the raion they lie in.
-CITY_UID_RAION = {1293: "kharkivskyi", 564: "zaporizkyi"}
+# alerts.in.ua city locations (level "city", declared separately from their raion):
+# the raion they lie in. UIDs as seen in alerts.in.ua history (2026) and in the
+# alerts_in_ua client; titles as a fallback for cities with an unknown UID.
+CITY_UID_RAION = {
+    1293: "kharkivskyi", 6293: "kharkivskyi", 564: "zaporizkyi", 5564: "zaporizkyi",
+    5332: "dniprovskyi", 5279: "kryvorizkyi", 5351: "nikopolskyi", 5349: "nikopolskyi",
+    5786: "oleksandriiskyi",
+}
+CITY_TITLE_RAION = {
+    "м. Харків": "kharkivskyi", "м. Запоріжжя": "zaporizkyi", "м. Дніпро": "dniprovskyi",
+    "м. Кривий Ріг": "kryvorizkyi", "м. Нікополь": "nikopolskyi", "м. Марганець": "nikopolskyi",
+    "м. Світловодськ": "oleksandriiskyi", "м. Херсон": "khersonskyi", "м. Миколаїв": "mykolaivskyi",
+    "м. Одеса": "odeskyi", "м. Суми": "sumskyi", "м. Чернігів": "chernihivskyi", "м. Полтава": "poltavskyi",
+    "м. Кременчук": "kremenchutskyi", "м. Краматорськ": "kramatorskyi", "м. Слов'янськ": "kramatorskyi",
+    "м. Павлоград": "pavlohradskyi", "м. Кам'янське": "kamianskyi", "м. Львів": "lvivskyi",
+}
 
 
 def oblast_raions(oblast: str) -> list[Raion]:
@@ -227,6 +241,7 @@ def norm_uk(title: str) -> str:
 
 _BY_UK = {norm_uk(r.name_uk): r for r in RAIONS}
 _BY_UK[norm_uk("Київ")] = BY_ID["kyiv-city"]
+_BY_UK.update({norm_uk(t): BY_ID[rid] for t, rid in CITY_TITLE_RAION.items()})
 
 
 def from_alerts_in_ua(uid: int | str | None = None, title: str | None = None, raion: str | None = None) -> Raion | None:
@@ -247,7 +262,7 @@ def from_alerts_in_ua(uid: int | str | None = None, title: str | None = None, ra
         if u in CITY_UID_RAION:
             return BY_ID[CITY_UID_RAION[u]]
     for t in (title, raion):
-        if t:
+        if isinstance(t, str) and t:
             r = _BY_UK.get(norm_uk(t))
             if r is not None:
                 return r

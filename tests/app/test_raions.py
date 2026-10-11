@@ -216,3 +216,41 @@ def test_static_site_has_raions(settings, tmp_path):
         assert (out / "api" / "raions" / f"{r['id']}.json").exists()
     assert (out / "static" / "raions-map.json").exists() and (out / "static" / "raions-map.LICENSE.txt").exists()
     assert 'href="api/raions.json"' in (out / "index.html").read_text(encoding="utf-8")
+
+
+def test_raion_history_from_the_live_store(tmp_path):
+    """alerts.in.ua history pulls and polls in the store -> raion alerts, point in time, with the covered span."""
+    from airraid import store
+    from airraid.live_alerts import OBLAST_UID
+    from airraid.raion_data import load_history, load_store
+
+    root = tmp_path / "live-data"
+    pull = pd.Timestamp("2026-10-11 20:00", tz="UTC")
+    rec = lambda uid, title, level, oblast, start, end: {  # noqa: E731
+        "uid": uid, "oblast": oblast, "oblast_uid": "22", "title": title, "level": level, "raion": None,
+        "started_at": pd.Timestamp(start, tz="UTC"), "alert_type": "air_raid",
+        "finished_at": pd.Timestamp(end, tz="UTC") if end else pd.NaT, "id": f"{uid}-{start}", "extra": "{}"}
+    rows = [
+        rec("124", "Харківський район", "raion", "Kharkivska oblast", "2026-10-01 10:00", "2026-10-01 11:00"),
+        rec("1324", "Берестинська територіальна громада", "hromada", "Kharkivska oblast", "2026-10-02 10:00", "2026-10-02 10:30"),
+        rec("6293", "м. Харків", "city", "Kharkivska oblast", "2026-10-03 10:00", "2026-10-03 10:20"),
+        rec("22", "Харківська область", "oblast", "Kharkivska oblast", "2026-10-04 10:00", "2026-10-04 10:40"),
+        rec("122", "Чугуївський район", "raion", "Kharkivska oblast", "2026-10-11 19:30", None),  # still running
+    ]
+    store.append(root, "alerts_history", pd.DataFrame(rows).assign(fetched_at=pull, requested_uid="22"))
+    store.append(root, "history_pulls", pd.DataFrame(
+        [{"fetched_at": pull, "uid": u, "status": 200, "n_records": 1} for u, r in OBLAST_UID.items() if r != "Luhanska oblast"]))
+    a, spans = load_store(root, as_of=pull + pd.Timedelta(minutes=5))
+    assert spans == [(pull - pd.Timedelta(days=29), pull)]
+    got = {(r.region, str(r.start)[:16]) for r in a.itertuples()}
+    assert ("kharkivskyi", "2026-10-01 10:00") in got
+    assert ("berestynskyi", "2026-10-02 10:00") in got  # hromada -> its raion
+    assert ("kharkivskyi", "2026-10-03 10:00") in got  # city -> its raion
+    assert {r for r, s in got if s == "2026-10-04 10:00"} == {"bohodukhivskyi", "iziumskyi", "berestynskyi",
+                                                              "kupianskyi", "lozivskyi", "kharkivskyi", "chuhuivskyi"}
+    running = a[(a["region"] == "chuhuivskyi") & (a["start"] == pd.Timestamp("2026-10-11 19:30", tz="UTC"))]
+    assert running["end"].iloc[0] == pull  # open: known to run until the pull, never beyond
+    # point in time: before the pull the store knows nothing
+    assert load_store(root, as_of=pull - pd.Timedelta(minutes=1))[0].empty
+    h = load_history(tmp_path / "missing.csv", root, as_of=pull + pd.Timedelta(minutes=5), download=False)
+    assert h.covered(pull - pd.Timedelta(days=28), pull) and not h.covered(pull - pd.Timedelta(days=30), pull)
