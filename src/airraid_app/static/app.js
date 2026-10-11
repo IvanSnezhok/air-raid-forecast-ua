@@ -12,6 +12,10 @@ const pct = (p) => (p == null ? "–" : `${Math.round(p * 100)}%`);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const slug = (name) => name.replace(/ oblast$/, "").toLowerCase().replace(/ /g, "-");
 const fullName = (r) => (r.name === "Kyiv City" ? "м. Київ" : `${r.name_uk} область`);
+const LEVELS = [[0.15, "низька"], [0.4, "помірна"], [0.7, "висока"], [1.01, "дуже висока"]];
+const levelIdx = (p) => LEVELS.findIndex(([x]) => p < x);
+const level = (p) => (p == null ? "" : `<span class="lvl l${levelIdx(p)}">${LEVELS[levelIdx(p)][1]}</span>`);
+const listUk = (names) => (names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} і ${names[names.length - 1]}`);
 const num = (v, d = 3) => (v == null ? "–" : Number(v).toFixed(d));
 
 function duration(fromIso, toDate = new Date()) {
@@ -121,7 +125,7 @@ function tipHTML(r) {
     return `<b>${esc(fullName(r))}</b><br>${s}`;
   }
   const p = r.probs?.[S.target]?.[S.horizon];
-  return `<b>${esc(fullName(r))}</b><br>${pct(p)} · ${S.target === "active" ? "тривога в годину" : "нова тривога"} ${S.horizon}`;
+  return `<b>${esc(fullName(r))}</b><br>${pct(p)}, ${p == null ? "" : LEVELS[levelIdx(p)][1]} ймовірність`;
 }
 
 function paintMap() {
@@ -241,6 +245,26 @@ function renderSummary() {
   $("#summary").innerHTML = tiles.join("");
 }
 
+function renderHeadline() {
+  const st = S.state, fc = S.forecast;
+  if (!st || !fc) return;
+  const on = st.regions.filter((r) => r.active);
+  const live = st.source === "alerts.in.ua";
+  const when = live ? "Зараз" : `На ${fmtTime.format(new Date(st.as_of))} (кінець датасету)`;
+  let a = on.length
+    ? `${when} тривога в <b class="hot">${on.length} ${on.length === 1 ? "області" : "областях"}</b>: ${esc(listUk(on.map((r) => r.name_uk)))}.`
+    : `${when} тривог немає.`;
+  const h = fc.horizons.includes(3) ? 3 : fc.horizons[0];
+  const quiet = fc.regions.filter((r) => !on.some((x) => x.id === r.id));
+  const top = [...quiet].sort((x, y) => y.probs.onset[h] - x.probs.onset[h]).filter((r) => r.probs.onset[h] >= 0.4).slice(0, 3);
+  a += top.length
+    ? ` Найближчими ${h} год нова тривога найімовірніша: ${top.map((r) => `${esc(r.name_uk)} <b>${pct(r.probs.onset[h])}</b>`).join(", ")}.`
+    : ` Найближчими ${h} год висока ймовірність нової тривоги не очікується в жодній області без тривоги.`;
+  $("#headline").innerHTML = a;
+  const dl = $("#region-list");
+  if (!dl.childElementCount) dl.innerHTML = fc.regions.map((r) => `<option value="${esc(r.name_uk)}"></option>`).join("");
+}
+
 function renderBanner() {
   const w = [...(S.forecast?.warnings || [])];
   const b = $("#banner");
@@ -294,11 +318,24 @@ function renderDetail(d) {
   const rows = hs.map((h) => `<tr><td class="h">${h} год<br><span class="small">${fmtTime.format(new Date(w[h].active[0]))}–${fmtTime.format(new Date(w[h].active[1]))}</span></td>
       <td>${bar(d.probs.active[h])}</td><td>${bar(d.probs.onset[h])}</td></tr>`).join("");
   const reg = S.metrics?.holdout?.by_region?.find((x) => x.region === d.name && x.target === "active" && x.horizon === 1);
+  const h3 = hs.includes(3) ? 3 : hs[0];
+  const brief = `<div class="brief"><p>Тривога в наступну годину: ${level(d.probs.active[1])} ${pct(d.probs.active[1])}</p>
+    <p>Нова тривога протягом ${h3} год: ${level(d.probs.onset[h3])} ${pct(d.probs.onset[h3])}</p></div>`;
+  const ver = d.verification?.active_h1 || [];
+  const done = ver.filter((x) => x.y != null);
+  const right = done.filter((x) => (x.p >= 0.5) === (x.y === 1)).length;
+  const strip = ver.length ? `<h3>Минулі прогнози і що сталося</h3>
+    <div class="strip">${ver.map((x) => `<span class="c ${x.y == null ? "yn" : "y" + x.y}" style="background:${rampColor(x.p)}"
+      title="${fmtTime.format(new Date(x.origin))}: прогноз ${pct(x.p)}, ${x.y == null ? "ще невідомо" : x.y ? "тривога була" : "тривоги не було"}"></span>`).join("")}</div>
+    <div class="strip-axis"><span>${fmtFull.format(new Date(ver[0].origin))}</span><span>${fmtTime.format(new Date(ver[ver.length - 1].origin))}</span></div>
+    <p class="small muted">Колір: прогноз тривоги на наступну годину. Крапка: тривога була, кружечок: не було.
+      ${done.length ? `Справдилось ${right} з ${done.length} (поріг 50%).` : "Результати зʼявляться, щойно мине перша прогнозована година."}</p>` : "";
   $("#detail").innerHTML = `
-    <h2>${esc(fullName(d))}</h2>${status}${locs}
+    <h2>${esc(fullName(d))}</h2>${status}${locs}${brief}
     <p class="small muted">${S.state?.source === "alerts.in.ua" ? "Стан за alerts.in.ua" : "Стан на кінець датасету"}; прогноз станом на ${d.origin_kyiv} за Києвом.</p>
     <h3>Прогноз</h3>
     <table class="probs"><thead><tr><th></th><th>Тривога в цю годину</th><th>Нова тривога за цей час</th></tr></thead><tbody>${rows}</tbody></table>
+    ${strip}
     <h3>Останні 72 години і прогноз</h3>
     <div id="ch-hist"></div>
     <div class="chart-legend"><span><i style="background:${css("--alert")}"></i>частка години під тривогою</span><span><i style="background:${rampColor(0.5)}"></i>прогноз: ймовірність тривоги</span></div>
@@ -472,7 +509,28 @@ async function renderMetrics() {
   const plans = same && planList.length
     ? `${planList[0][1].months} міс. історії, ${planList[0][1].trees} дерев для кожної моделі`
     : planList.map(([k, p]) => `${k.replace("active_h", "тривога ").replace("onset_h", "нова ")} год: ${p.months} міс., ${p.trees} дерев`).join("; ");
-  let html = `<h2 style="margin-top:0">Якість моделі</h2>
+  let ver = null;
+  try { ver = await getJSON("/api/verification"); } catch (_) { /* optional */ }
+  let verHTML = "";
+  if (ver) {
+    const vs = ver.scores || [];
+    const vget = (t, h) => vs.find((r) => r.target === t && r.horizon === h);
+    const vtile = (t, h) => {
+      const r = vget(t, h);
+      if (!r) return "";
+      return `<div class="stat"><div class="k">${TARGET_UK[t].replace("N", h)}</div>
+        <div class="v ${r.bss_vs_clim > 0 ? "pos" : "neg"}">${signedPct(r.bss_vs_clim)}</div>
+        <div class="s">${r.n} прогнозів · ${r.hit_rate_high != null ? `коли ≥50%, подія була в ${pct(r.hit_rate_high)}` : ""}${r.event_rate_low != null ? `; коли &lt;20%, лише в ${pct(r.event_rate_low)}` : ""}</div></div>`;
+    };
+    verHTML = `<div class="card"><div class="card-h"><h2>Перевірка живих прогнозів</h2>
+        <span class="small muted">${ver.journal_since ? `журнал з ${fmtFull.format(new Date(ver.journal_since))}` : ""}</span></div>
+      <p class="small muted">Кожен виданий прогноз зберігається і, щойно відповідна година минає, звіряється з тим, що сталося
+        (за alerts.in.ua і датасетом). Показано перевагу над кліматологією за Brier score.</p>
+      ${vs.length ? `<div class="summary">${vtile("active", 1)}${vtile("onset", 1)}${vtile("onset", 3)}${vtile("onset", 6)}</div>`
+        : `<p>Видано прогнозів: ${ver.n_issued}. Перевірених ще немає: потрібно, щоб минули прогнозовані години і зʼявились дані про них.</p>`}</div>`;
+  }
+  let html = `<h2 style="margin-top:0">Якість моделі</h2>${verHTML}
+    <h3 style="margin:24px 0 8px">Перевірка на відкладеному тижні</h3>
     <p class="lead">Перед навчанням моделі, що зараз працює, останні ${ho.days} днів (${fmtFull.format(new Date(ho.start))} – ${fmtFull.format(new Date(ho.end))})
       були відкладені. Модель навчилась на даних до них і прогнозувала кожну годину для кожної області так, ніби це відбувалося наживо.
       Нижче її результат поруч із двома простими орієнтирами.</p>
@@ -546,6 +604,7 @@ function setView() {
 function render() {
   renderHorizonButtons();
   $("#window").textContent = windowText();
+  renderHeadline();
   renderSummary();
   renderBanner();
   paintMap();
@@ -585,6 +644,11 @@ async function main() {
   window.addEventListener("hashchange", setView);
   $("#rank").addEventListener("click", (ev) => { const tr = ev.target.closest("tr[data-id]"); if (tr) select(tr.dataset.id); });
   $("#rank").addEventListener("keydown", (ev) => { const tr = ev.target.closest("tr[data-id]"); if (tr && ev.key === "Enter") select(tr.dataset.id); });
+  $("#search").addEventListener("change", (ev) => {
+    const q = ev.target.value.trim().toLowerCase();
+    const r = S.forecast?.regions.find((x) => x.name_uk.toLowerCase() === q) || S.forecast?.regions.find((x) => x.name_uk.toLowerCase().startsWith(q));
+    if (r) { select(r.id); ev.target.value = ""; ev.target.blur(); }
+  });
   S.geo = await getJSON("/static/ukraine-map.json");
   setView();
   let ok = await refresh();

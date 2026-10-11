@@ -38,7 +38,7 @@ def settings(tmp_path_factory) -> Settings:
     path = d / "alerts.csv"
     synthetic_alerts().to_csv(path, index=False)
     return Settings(
-        data_path=path, model_dir=d / "models", reports_dir=d / "reports", download=False,
+        data_path=path, model_dir=d / "models", state_dir=d / "state", reports_dir=d / "reports", download=False,
         train_months=1, n_trees=20, holdout_days=3, background=False, lgb_threads=2,
     )
 

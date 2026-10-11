@@ -97,7 +97,13 @@ def create_app(settings: Settings | None = None, engine: ForecastEngine | None =
             **match,
             "origin": f["origin"], "origin_kyiv": f["origin_kyiv"], "windows": f["windows"],
             "holdout": engine.region_holdout(match["name"]),
+            "verification": (await run_in_threadpool(engine.verification, match["name"]))["recent"],
         }
+
+    @app.get("/api/verification", tags=["evaluation"], summary="Перевірка виданих прогнозів: що справдилось")
+    async def verification():
+        _ready()
+        return await run_in_threadpool(engine.verification)
 
     @app.get("/api/metrics", tags=["evaluation"], summary="Якість моделей")
     def metrics():

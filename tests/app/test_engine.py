@@ -25,16 +25,15 @@ def test_stale_cache_is_rejected(settings, engine, tmp_path):
     assert not e2.load_models()
 
 
-def test_live_alerts_change_the_forecast(settings, engine, monkeypatch):
+def test_live_alerts_change_the_forecast(settings, engine, monkeypatch, tmp_path):
     """An ongoing alert reported by alerts.in.ua must switch on `active_now` for that region."""
     now = engine.hist_end.ceil("h") + pd.Timedelta(minutes=30)
     started = (now - pd.Timedelta(hours=2)).isoformat()
     payload = {"alerts": [{"alert_type": "air_raid", "location_title": "Подільський район", "location_type": "raion",
                            "location_oblast": "Одеська область", "started_at": started}]}
-    e = ForecastEngine(settings)
+    e = ForecastEngine(type(settings)(**{**vars(settings), "alerts_token": "test", "state_dir": tmp_path}))
     e.load_data()
-    e.load_models()
-    e.s = type(settings)(**{**vars(settings), "alerts_token": "test"})
+    assert e.load_models()
     monkeypatch.setattr("airraid_app.engine.fetch_active", lambda token: payload)
     monkeypatch.setattr(pd.Timestamp, "now", classmethod(lambda cls, tz=None: now))
     f = e.forecast()
@@ -60,13 +59,12 @@ def test_parse_active_ignores_other_alert_types_and_unknown_regions():
     assert st.regions["Kyiv City"].since == pd.Timestamp("2026-10-11 08:50", tz="UTC")
 
 
-def test_api_failure_falls_back_to_dataset(settings, engine, monkeypatch):
+def test_api_failure_falls_back_to_dataset(settings, engine, monkeypatch, tmp_path):
     def boom(token):
         raise TimeoutError("no network")
 
-    e = ForecastEngine(settings)
+    e = ForecastEngine(type(settings)(**{**vars(settings), "alerts_token": "test", "state_dir": tmp_path}))
     e.load_data()
-    e.s = type(settings)(**{**vars(settings), "alerts_token": "test"})
     monkeypatch.setattr("airraid_app.engine.fetch_active", boom)
     st = e.live_state()
     assert st.source == "dataset" and "alerts.in.ua" in st.error

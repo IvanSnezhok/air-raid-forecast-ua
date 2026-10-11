@@ -19,6 +19,7 @@ def _env_bool(name: str, default: bool) -> bool:
 class Settings:
     data_path: Path = RAW_PATH
     model_dir: Path = ROOT / "var" / "models"
+    state_dir: Path = ROOT / "var" / "state"  # live alert log and forecast journal
     reports_dir: Path = ROOT / "reports"
     # Live alert state. Never commit the token; set it as an env var / secret.
     alerts_token: str | None = None
@@ -44,6 +45,8 @@ class Settings:
             s.data_path = Path(v)
         if v := env.get("AIRRAID_MODEL_DIR"):
             s.model_dir = Path(v)
+        if v := env.get("AIRRAID_STATE_DIR"):
+            s.state_dir = Path(v)
         if v := env.get("AIRRAID_REPORTS_DIR"):
             s.reports_dir = Path(v)
         s.alerts_token = env.get("ALERTS_IN_UA_TOKEN") or None

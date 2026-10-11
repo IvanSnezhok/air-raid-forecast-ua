@@ -35,6 +35,7 @@
   </section>
 
   <section id="view-map" class="view" hidden>
+    <p class="headline" id="headline"></p>
     <div class="summary" id="summary"></div>
 
     <div class="controls">
@@ -48,6 +49,9 @@
       </div>
       <div class="seg" role="group" aria-label="Горизонт" id="horizon" hidden></div>
       <span class="window" id="window"></span>
+      <label class="search"><span class="sr">Знайти область</span>
+        <input id="search" list="region-list" placeholder="Знайти область…" autocomplete="off">
+        <datalist id="region-list"></datalist></label>
     </div>
 
     <div class="grid">
@@ -122,6 +126,9 @@
     </ul>
     <p>Метрики: Brier score (середня квадратична помилка ймовірності, менше краще), Brier skill score відносно кліматології
       (більше нуля означає, що модель краща за орієнтир) і ROC AUC. Після перевірки модель перенавчається на всіх даних.</p>
+    <p>Крім того, сервіс зберігає кожен виданий прогноз і, коли прогнозована година минає, звіряє його з тим, що сталося насправді.
+      Результати видно на сторінці «Якість моделі» і в деталях кожної області («Минулі прогнози і що сталося»).
+      Модель щодоби перенавчається на свіжих даних, тож нові тривоги одразу потрапляють у навчання.</p>
 
     <h3>API</h3>
     <p>Усі дані сторінки доступні як JSON: <a href="/docs">/docs</a> (інтерактивна документація),

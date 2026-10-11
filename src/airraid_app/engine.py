@@ -33,6 +33,7 @@ from airraid.features import (
 from airraid.models import GBM, feature_columns
 
 from .config import Settings
+from .journal import ForecastJournal, LiveRecorder
 from .live import LiveState, fetch_active, parse_active, state_from_dataset
 from .regions import slug, uk_name
 
@@ -81,6 +82,8 @@ class ForecastEngine:
         self._live_at: float = 0.0
         self._forecast: tuple[tuple, dict] | None = None
         self._stop = threading.Event()
+        self.recorder = LiveRecorder(settings.state_dir / "live_alerts.csv")
+        self.journal = ForecastJournal(settings.state_dir / "forecast_journal.parquet")
 
     # ------------------------------------------------------------------ data
     def load_data(self, refresh: bool | None = None) -> None:
@@ -258,6 +261,7 @@ class ForecastEngine:
                 state = state_from_dataset(alerts, regions, error=f"alerts.in.ua недоступний: {type(e).__name__}")
         if state is None:
             state = state_from_dataset(alerts, regions)
+        self.recorder.observe(state)
         with self.lock:
             self._live, self._live_at = state, time.time()
         return state
@@ -276,16 +280,26 @@ class ForecastEngine:
             origin = hist_end.floor("h")
         ongoing = live.ongoing_alerts()
         ongoing = ongoing[ongoing["start"] < origin] if live.source == "alerts.in.ua" else ongoing.iloc[0:0]
-        key = (origin, hist_end, tuple(map(tuple, ongoing.astype(str).to_numpy())))
+        key = (origin, hist_end, tuple(map(tuple, ongoing.astype(str).to_numpy())), self.recorder.version())
         with self.lock:
             if self._forecast and self._forecast[0] == key:
                 return self._forecast[1]
-        result = self._compute(alerts, hist_end, origin, ongoing, live)
+        result, journal_rows = self._compute(alerts, hist_end, origin, ongoing, live)
         with self.lock:
             self._forecast = (key, result)
+        if not self.journal.has(origin):
+            self.journal.record(journal_rows)
         return result
 
-    def _compute(self, alerts, hist_end, origin, ongoing, live: LiveState) -> dict:
+    def _history(self, alerts: pd.DataFrame) -> pd.DataFrame:
+        """Dataset history plus alerts recorded from live polls after it."""
+        rec = self.recorder.alerts()
+        if rec.empty:
+            return alerts
+        return pd.concat([alerts, rec[rec["region"].isin(self.regions)]], ignore_index=True)
+
+    def _compute(self, alerts, hist_end, origin, ongoing, live: LiveState) -> tuple[dict, pd.DataFrame]:
+        alerts = self._history(alerts)
         if not ongoing.empty:
             extra = ongoing.assign(end=origin + pd.Timedelta(hours=1), naive=False)  # end is never used as a feature
             alerts = pd.concat([alerts, extra], ignore_index=True)
@@ -294,6 +308,7 @@ class ForecastEngine:
         k_now = grid.n_minutes // 60
         base = build_features(grid, np.array([k_now]), H)
         probs = {r: {t: {} for t in TARGETS} for r in grid.regions}
+        journal = []
         for h in HORIZONS:
             x = add_horizon_features(base, grid, H, h, S)
             for t in TARGETS:
@@ -302,8 +317,14 @@ class ForecastEngine:
                 got = feature_columns(x) + ["region"]
                 if sorted(expected) != sorted(got):
                     raise RuntimeError("feature set changed since the models were trained; retrain needed")
-                for r, p in zip(x["region"], model.predict(x)):
+                pred = model.predict(x)
+                for r, p in zip(x["region"], pred):
                     probs[r][t][h] = round(float(p), 4)
+                journal.append(pd.DataFrame({
+                    "origin": origin, "region": x["region"].to_numpy(), "target": t, "horizon": h,
+                    "p": pred, "clim": x[CLIM_COL[t]].to_numpy().astype(float),
+                    "issued_at": pd.Timestamp.now(tz="UTC"), "live": live.source == "alerts.in.ua",
+                }))
 
         # Recent history for charts: hourly share under alert, last 72 h and 28-day hour-of-day profile.
         n72 = min(72, H.shape[1])
@@ -324,7 +345,9 @@ class ForecastEngine:
             }
             for h in HORIZONS
         }
-        gap_h = (origin - hist_end) / pd.Timedelta(hours=1)
+        known = self.recorder.known_until(hist_end)
+        cs = self.recorder.covered_since
+        gap_h = ((cs - hist_end) if cs is not None and cs > hist_end else (origin - known)) / pd.Timedelta(hours=1)
         warnings = []
         if live.source == "dataset":
             warnings.append("Немає живих даних (ALERTS_IN_UA_TOKEN не задано або API недоступне): "
@@ -334,7 +357,7 @@ class ForecastEngine:
                             "ознаки за останні години можуть бути занижені.")
         if live.error:
             warnings.append(live.error)
-        return {
+        result = {
             "origin": _iso(origin),
             "origin_kyiv": _kyiv(origin),
             "history_end": _iso(hist_end),
@@ -356,6 +379,73 @@ class ForecastEngine:
                 for i, r in enumerate(grid.regions)
             ],
         }
+        return result, pd.concat(journal, ignore_index=True)
+
+    # ---------------------------------------------------------- verification
+    def verification(self, region: str | None = None, recent_hours: int = 24) -> dict:
+        """Compare issued forecasts with what happened, for windows that are fully observed."""
+        with self.lock:
+            alerts, hist_end = self.alerts, self.hist_end
+        if alerts is None:
+            raise NotReady("no data")
+        J, known = self._verified_journal(alerts, hist_end)
+        out = {"journal_since": _iso(J["origin"].min()) if len(J) else None, "known_until": _iso(known),
+               "n_issued": int(J["origin"].nunique()) if len(J) else 0, "scores": [], "recent": {}}
+        if J.empty:
+            return out
+        V = J.dropna(subset=["y"])
+        out["n_verified"] = int(V["origin"].nunique())
+        for (t, h), q in V.groupby(["target", "horizon"]):
+            y, p, c = q["y"].to_numpy(), q["p"].to_numpy(), q["clim"].to_numpy()
+            hi, lo = p >= 0.5, p < 0.2
+            out["scores"].append({
+                "target": t, "horizon": int(h), "n": int(len(q)), "base_rate": float(y.mean()),
+                "brier": float(np.mean((p - y) ** 2)), "brier_clim": float(np.mean((c - y) ** 2)),
+                "bss_vs_clim": float(1 - np.mean((p - y) ** 2) / np.mean((c - y) ** 2)) if np.mean((c - y) ** 2) > 0 else None,
+                "n_high": int(hi.sum()), "hit_rate_high": float(y[hi].mean()) if hi.any() else None,
+                "n_low": int(lo.sum()), "event_rate_low": float(y[lo].mean()) if lo.any() else None,
+            })
+        out["scores"] = _clean(out["scores"])
+        if region is not None:
+            for t, h in (("active", 1), ("onset", 3)):
+                q = J[(J["region"] == region) & (J["target"] == t) & (J["horizon"] == h)].sort_values("origin").tail(recent_hours)
+                out["recent"][f"{t}_h{h}"] = [
+                    {"origin": _iso(o), "p": round(float(p), 3), "y": None if np.isnan(y) else int(y)}
+                    for o, p, y in zip(q["origin"], q["p"], q["y"])
+                ]
+        return out
+
+    def _verified_journal(self, alerts, hist_end) -> tuple[pd.DataFrame, pd.Timestamp]:
+        """Journal rows with the observed outcome `y` (NaN while the window is not fully observed). Cached."""
+        J = self.journal.frame()
+        known = self.recorder.known_until(hist_end)
+        key = (len(J), J["origin"].max() if len(J) else None, known.floor("h"), hist_end, self.recorder.version())
+        with self.lock:
+            if getattr(self, "_verified", None) and self._verified[0] == key:
+                return self._verified[1], known
+        if J.empty:
+            return J.assign(y=np.nan), known
+        grid = build_grid(self._history(alerts), data_end=known.floor("h"))
+        H, S = hourly_fraction(grid), hourly_starts(grid)
+        J["k"] = ((J["origin"] - grid.t0) / pd.Timedelta(hours=1)).round().astype(int)
+        J = J[J["region"].isin(grid.regions) & (J["k"] >= 1)].reset_index(drop=True)
+        r_idx = {r: i for i, r in enumerate(grid.regions)}
+        ys = np.full(len(J), np.nan)
+        for (t, h), q in J.groupby(["target", "horizon"]):
+            ks = q["k"].to_numpy()
+            ok = ks + h <= H.shape[1]
+            ri = q["region"].map(r_idx).to_numpy()
+            y = np.full(len(q), np.nan)
+            if t == "active":
+                y[ok] = H[ri[ok], ks[ok] + h - 1] > 0
+            else:
+                win = ks[ok][:, None] + np.arange(h)
+                y[ok] = S[ri[ok][:, None], win].max(axis=1)
+            ys[q.index.to_numpy()] = y
+        J["y"] = ys
+        with self.lock:
+            self._verified = (key, J)
+        return J, known
 
     # --------------------------------------------------------------- metrics
     def metrics(self) -> dict:
@@ -430,6 +520,7 @@ class ForecastEngine:
                 self.train()
         if self.models:
             self.forecast()
+            self.verification()  # warm the cache for the UI
 
     def run_forever(self, interval: float = 30.0) -> None:
         self.bootstrap()

@@ -23,6 +23,7 @@ USER app
 ENV PORT=7860 \
     AIRRAID_DATA_PATH=/app/data/raw/volunteer_data_en.csv \
     AIRRAID_MODEL_DIR=/app/var/models \
+    AIRRAID_STATE_DIR=/app/var/state \
     AIRRAID_REPORTS_DIR=/app/reports \
     PYTHONUNBUFFERED=1
 EXPOSE 7860
