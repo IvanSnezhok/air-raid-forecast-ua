@@ -71,17 +71,30 @@ const invText = (p) => (darkMode() ? p > 0.6 : p > 0.55);
 const S = {
   geo: null, state: null, forecast: null, metrics: null,
   layer: "now", target: "active", horizon: 1, selected: null, view: "map",
+  // raion layer: geometry, /api/raions, selected raion, current viewBox (zoom)
+  unit: "oblast", rgeo: null, raions: null, rsel: null, vb: null, zoomOblast: "",
 };
 
 // ---------------------------------------------------------------- map
-function buildMap() {
-  const svg = $("#map");
-  svg.setAttribute("viewBox", S.geo.viewBox);
-  svg.innerHTML = "";
+function mapDefs(svg) {
   const defs = el("defs", {}, svg);
   const pat = el("pattern", { id: "hatch", width: 7, height: 7, patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)" }, defs);
   el("rect", { width: 7, height: 7, fill: css("--calm") }, pat);
   el("line", { x1: 0, y1: 0, x2: 0, y2: 7, stroke: css("--nodata"), "stroke-width": 3 }, pat);
+  // part of a raion under alert (hromada-level alert): red stripes
+  const part = el("pattern", { id: "part", width: 5, height: 5, patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)" }, defs);
+  el("rect", { width: 5, height: 5, fill: css("--alert-soft") }, part);
+  el("line", { x1: 0, y1: 0, x2: 0, y2: 5, stroke: css("--alert"), "stroke-width": 2.6 }, part);
+}
+
+function buildMap() {
+  if (S.unit === "raion" && S.rgeo) { buildRaionMap(); return; }
+  const svg = $("#map");
+  setFullView(S.geo.viewBox);
+  svg.innerHTML = "";
+  svg.classList.remove("raion-mode");
+  svg.setAttribute("aria-label", "Мапа областей України");
+  mapDefs(svg);
 
   const gReg = el("g", {}, svg);
   for (const [, d] of Object.entries(S.geo.other || {})) el("path", { d, class: "nodata" }, gReg);
@@ -94,26 +107,34 @@ function buildMap() {
   el("circle", { cx: c.cx, cy: c.cy, r: c.r, class: "reg city", "data-id": "kyiv-city", tabindex: 0, role: "button" }, gReg);
   el("g", { id: "labels" }, svg);
   $("#attr").textContent = S.geo.attribution;
+}
 
+// Map events are attached once and work for both layers: oblasts carry data-id, raions data-rid.
+function setupMapEvents() {
+  const svg = $("#map");
   const tip = $("#tip");
   svg.addEventListener("pointermove", (ev) => {
-    const t = ev.target.closest("[data-id]");
-    if (!t) { tip.hidden = true; return; }
-    const r = regionData(t.dataset.id);
-    if (!r) { tip.hidden = true; return; }
+    const t = ev.target.closest("[data-id], [data-rid]");
+    const html = !t ? null : t.dataset.rid ? raionTipHTML(raionById(t.dataset.rid), t.dataset.rid) : (regionData(t.dataset.id) && tipHTML(regionData(t.dataset.id)));
+    if (!html) { tip.hidden = true; return; }
     const box = $(".mapwrap").getBoundingClientRect();
     tip.style.left = `${ev.clientX - box.left}px`;
     tip.style.top = `${ev.clientY - box.top}px`;
-    tip.innerHTML = tipHTML(r);
+    tip.innerHTML = html;
     tip.hidden = false;
   });
   svg.addEventListener("pointerleave", () => { tip.hidden = true; });
   svg.addEventListener("click", (ev) => {
-    const t = ev.target.closest("[data-id]");
-    if (t && regionData(t.dataset.id)) select(t.dataset.id);
+    const t = ev.target.closest("[data-id], [data-rid]");
+    if (!t) return;
+    if (t.dataset.rid) { if (raionById(t.dataset.rid)) selectRaion(t.dataset.rid); }
+    else if (regionData(t.dataset.id)) select(t.dataset.id);
   });
   svg.addEventListener("keydown", (ev) => {
-    if ((ev.key === "Enter" || ev.key === " ") && ev.target.dataset?.id) { ev.preventDefault(); select(ev.target.dataset.id); }
+    if (ev.key !== "Enter" && ev.key !== " ") return;
+    const d = ev.target.dataset || {};
+    if (d.rid && raionById(d.rid)) { ev.preventDefault(); selectRaion(d.rid); }
+    else if (d.id) { ev.preventDefault(); select(d.id); }
   });
 }
 
@@ -152,6 +173,7 @@ function tipHTML(r) {
 
 function paintMap() {
   if (!S.geo) return;
+  if (S.unit === "raion" && S.rgeo) { paintRaions(); return; }
   const svg = $("#map");
   const labels = $("#labels");
   labels.innerHTML = "";
@@ -190,6 +212,14 @@ function paintMap() {
 
 function paintLegend() {
   const lg = $("#legend");
+  if (S.unit === "raion" && S.layer === "now") {
+    lg.innerHTML = `<span><i class="sw" style="background:${css("--alert")}"></i>Тривога на весь район</span>
+      <span><i class="sw" style="background:repeating-linear-gradient(45deg,${css("--alert")} 0 2px,${css("--alert-soft")} 2px 4px)"></i>Тривога в частині району (громади)</span>
+      <span><i class="sw" style="background:${css("--calm")}"></i>Немає тривоги</span>
+      <span><i class="sw" style="background:repeating-linear-gradient(45deg,${css("--calm")} 0 3px,${css("--nodata")} 3px 6px)"></i>Немає даних (Крим, Луганщина)</span>
+      ${liveRaions() ? "" : `<span class="warnnote">Немає живих даних по районах: стан районів показується, коли сервер має токен alerts.in.ua.</span>`}`;
+    return;
+  }
   if (S.layer === "now") {
     lg.innerHTML = `<span><i class="sw" style="background:${css("--alert")}"></i>Тривога</span>
       <span><i class="sw" style="background:${css("--calm")}"></i>Немає тривоги</span>
@@ -199,8 +229,9 @@ function paintLegend() {
       <span class="muted">жовтий: найімовірніше ударні дрони; червоний: ракети, балістика, КАБ або масована атака. Підпис: найімовірніший тип.</span>`;
   } else {
     const stops = [0, 0.2, 0.4, 0.6, 0.8, 1].map((p) => `${rampColor(p)} ${p * 100}%`).join(",");
+    const t = S.unit === "raion" ? rTarget() : S.target;
     lg.innerHTML = `<span>0%</span><span class="bar" style="background:linear-gradient(90deg,${stops})"></span><span>100%</span>
-      <span class="muted">ймовірність ${S.target === "active" ? "тривоги в цю годину" : "початку нової тривоги"}</span>`;
+      <span class="muted">ймовірність ${t === "active" ? "тривоги в цю годину" : "початку нової тривоги"}${S.unit === "raion" ? " у районі; наблизьте мапу, щоб побачити числа" : ""}</span>`;
   }
 }
 
@@ -223,12 +254,27 @@ function setupControls() {
   });
   seg("#target", "target");
   seg("#horizon", "horizon");
+  $("#unit").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button");
+    if (b && b.dataset.v !== S.unit) setUnit(b.dataset.v);
+  });
+  $("#zoom-alerts").addEventListener("click", zoomToAlerts);
+  $("#zoom-reset").addEventListener("click", () => { $("#zoom-info").textContent = ""; resetZoom(); });
+  $("#zoom-oblast").addEventListener("change", (ev) => {
+    S.zoomOblast = ev.target.value;
+    if (S.unit === "raion") renderRank();
+    if (S.zoomOblast) zoomToAlerts(); else { $("#zoom-info").textContent = ""; resetZoom(); }
+  });
 }
 
 function renderHorizonButtons() {
   const typeMode = S.target === "type" && S.forecast?.threats;
   const hs = typeMode ? S.forecast.threats.horizons : S.forecast?.horizons || [1, 2, 3, 6];
-  $('#target button[data-v="type"]').hidden = !S.forecast?.threats;
+  $('#target button[data-v="type"]').hidden = !S.forecast?.threats || S.unit === "raion";
+  if (S.unit === "raion" && S.target === "type") {
+    S.target = "active";
+    for (const x of $("#target").querySelectorAll("button")) x.setAttribute("aria-pressed", String(x.dataset.v === "active"));
+  }
   if (!hs.includes(S.horizon)) S.horizon = hs[0];
   const box = $("#horizon");
   if (box.dataset.hs === hs.join(",")) return;
@@ -237,6 +283,9 @@ function renderHorizonButtons() {
 }
 
 function windowText() {
+  if (S.layer === "now" && S.unit === "raion") {
+    return liveRaions() ? `Живі дані alerts.in.ua по районах, ${fmtTime.format(new Date(S.raions.live_as_of))}` : "Немає живих даних по районах";
+  }
   if (S.layer === "now") {
     if (!S.state) return "";
     return S.state.source === "alerts.in.ua"
@@ -264,6 +313,12 @@ function renderSummary() {
     tiles.push(`<div class="stat ${n ? "hot" : ""}"><div class="k">Під тривогою зараз</div>
       <div class="v">${n} <small>з ${st.regions.length} областей</small></div>
       <div class="s">${st.source === "alerts.in.ua" ? "alerts.in.ua, " + fmtTime.format(new Date(st.as_of)) : "за датасетом, " + fmtFull.format(new Date(st.as_of))}</div></div>`);
+  }
+  if (liveRaions()) {
+    const on = activeRaions(), part = on.filter((r) => r.live.level === "hromada").length;
+    tiles.push(`<div class="stat ${on.length ? "hot" : ""}"><div class="k">Районів під тривогою</div>
+      <div class="v">${on.length} <small>з ${S.raions.raions.length}</small></div>
+      <div class="s">${part ? `з них ${part} частково (окремі громади)` : "усі райони цілком"}</div></div>`);
   }
   if (fc) {
     const exp = fc.regions.reduce((s, r) => s + (r.probs.active[1] || 0), 0);
@@ -298,9 +353,16 @@ function renderHeadline() {
   a += top.length
     ? ` Найближчими ${h} год нова тривога найімовірніша: ${top.map((r) => `${esc(r.name_uk)} <b>${pct(r.probs.onset[h])}</b>`).join(", ")}.`
     : ` Найближчими ${h} год висока ймовірність нової тривоги не очікується в жодній області без тривоги.`;
+  if (liveRaions() && activeRaions().length) {
+    const n = activeRaions().length;
+    a += ` Під тривогою ${n} ${plural(n, "район", "райони", "районів")}: кнопка «До тривог» на мапі районів наблизить до них.`;
+  }
   $("#headline").innerHTML = a;
   const dl = $("#region-list");
-  if (!dl.childElementCount) dl.innerHTML = fc.regions.map((r) => `<option value="${esc(r.name_uk)}"></option>`).join("");
+  if (!dl.childElementCount) {
+    dl.innerHTML = fc.regions.map((r) => `<option value="${esc(r.name_uk)}"></option>`).join("")
+      + (S.raions?.raions || []).map((r) => `<option value="${esc(r.name_uk)}">${esc(r.oblast_uk)}</option>`).join("");
+  }
 }
 
 function renderBanner() {
@@ -314,6 +376,8 @@ function renderBanner() {
 function renderRank() {
   const fc = S.forecast;
   const t = $("#rank");
+  if (S.unit === "raion" && S.raions) { renderRaionRank(); return; }
+  $("#rank-title").textContent = "Усі області";
   if (!fc) { t.innerHTML = ""; return; }
   const hs = fc.horizons;
   const active = new Set((S.state?.regions || []).filter((r) => r.active).map((r) => r.id));
@@ -725,15 +789,322 @@ async function renderMetrics() {
   }));
 }
 
+// ---------------------------------------------------------------- raions
+const METHOD_SHORT = {
+  lightgbm: "модель району + історія", lightgbm_state: "модель району", oblast_x_share: "область × частка району", oblast: "прогноз області",
+};
+const shareStale = (sp) => !!sp && new Date() - new Date(sp[1]) > 3 * 864e5;
+const LEVEL_PHRASE = { oblast: "тривога на всю область", raion: "тривога на весь район", hromada: "тривога в частині району" };
+const raionById = (id) => S.raions?.raions.find((r) => r.id === id);
+const raionGeo = (id) => S.rgeo?.raions[id];
+const rTarget = () => (S.target === "type" ? "active" : S.target);
+const liveRaions = () => !!S.raions?.live_source;
+const activeRaions = (oblast = "") => (S.raions?.raions || []).filter((r) => r.live?.active && (!oblast || r.oblast === oblast));
+const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function setFullView(viewBox) {
+  const svg = $("#map");
+  S.full = viewBox.split(" ").map(Number);
+  svg.style.aspectRatio = `${S.full[2]} / ${S.full[3]}`;
+  applyViewBox(S.full);
+}
+
+function applyViewBox(vb) {
+  S.vb = vb;
+  $("#map").setAttribute("viewBox", vb.map((v) => v.toFixed(1)).join(" "));
+  const zoomed = S.full && vb[2] < S.full[2] * 0.98;
+  $("#zoom-reset").disabled = !zoomed;
+  $("#map").style.setProperty("--k", (S.full ? S.full[2] / vb[2] : 1).toFixed(3));
+}
+
+// Fit a bbox [x0, y0, x1, y1] with padding, keeping the map's aspect ratio; animated.
+function zoomTo(bbox) {
+  const [W, H] = [S.full[2], S.full[3]];
+  let [x0, y0, x1, y1] = bbox;
+  let w = Math.max(x1 - x0, W * 0.12), h = Math.max(y1 - y0, H * 0.12);
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+  w *= 1.25; h *= 1.25;
+  if (w / h > W / H) h = w * H / W; else w = h * W / H;
+  if (w > W) { w = W; h = H; }
+  const to = [Math.min(Math.max(cx - w / 2, -W * 0.05), W * 1.05 - w), Math.min(Math.max(cy - h / 2, -H * 0.05), H * 1.05 - h), w, h];
+  const from = S.vb || S.full;
+  if (reducedMotion()) { applyViewBox(to); paintRaionLabels(); return; }
+  const t0 = performance.now(), dur = 420;
+  const step = (now) => {
+    const k = Math.min(1, (now - t0) / dur), e = 1 - Math.pow(1 - k, 3);
+    applyViewBox(from.map((v, i) => v + (to[i] - v) * e));
+    if (k < 1) requestAnimationFrame(step); else paintRaionLabels();
+  };
+  requestAnimationFrame(step);
+}
+
+function unionBox(ids) {
+  const boxes = ids.map((id) => raionGeo(id)?.bbox).filter(Boolean);
+  if (!boxes.length) return null;
+  return [Math.min(...boxes.map((b) => b[0])), Math.min(...boxes.map((b) => b[1])), Math.max(...boxes.map((b) => b[2])), Math.max(...boxes.map((b) => b[3]))];
+}
+
+function resetZoom() {
+  if (!S.full) return;
+  const from = S.vb || S.full;
+  if (reducedMotion()) { applyViewBox(S.full); paintRaionLabels(); return; }
+  const t0 = performance.now(), dur = 360;
+  const step = (now) => {
+    const k = Math.min(1, (now - t0) / dur), e = 1 - Math.pow(1 - k, 3);
+    applyViewBox(from.map((v, i) => v + (S.full[i] - v) * e));
+    if (k < 1) requestAnimationFrame(step); else paintRaionLabels();
+  };
+  requestAnimationFrame(step);
+}
+
+async function ensureRaionGeo() {
+  if (!S.rgeo) S.rgeo = await getJSON("static/raions-map.json");
+}
+
+async function setUnit(unit) {
+  if (unit === "raion" && !S.raions) return;
+  if (unit === "raion") await ensureRaionGeo();
+  S.unit = unit;
+  for (const b of $("#unit").querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.v === unit));
+  $("#zoombar").hidden = unit !== "raion";
+  buildMap();
+  render();
+  if (unit === "raion" && S.rsel) renderRaionDetailById(S.rsel);
+  else if (unit === "oblast" && S.selected) select(S.selected);
+  else $("#detail").innerHTML = `<p class="muted">Оберіть ${unit === "raion" ? "район" : "область"} на мапі або в списку, щоб побачити деталі.</p>`;
+}
+
+async function zoomToAlerts() {
+  if (S.unit !== "raion") await setUnit("raion");
+  const ob = S.zoomOblast;
+  const act = activeRaions(ob).map((r) => r.id);
+  const info = $("#zoom-info");
+  if (act.length) {
+    zoomTo(unionBox(act));
+    info.textContent = `${act.length} ${plural(act.length, "район", "райони", "районів")} під тривогою${ob ? ` (${S.raions.raions.find((r) => r.oblast === ob)?.oblast_uk} обл.)` : ""}`;
+  } else if (ob) {
+    zoomTo(unionBox(S.raions.raions.filter((r) => r.oblast === ob).map((r) => r.id)));
+    info.textContent = liveRaions() ? "У цій області зараз тривоги немає" : "Немає живих даних по районах";
+  } else {
+    info.textContent = liveRaions() ? "Зараз жоден район не під тривогою" : "Немає живих даних по районах";
+  }
+}
+
+function plural(n, one, few, many) {
+  const m10 = n % 10, m100 = n % 100;
+  return m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? few : many;
+}
+
+function renderZoomOblasts() {
+  const sel = $("#zoom-oblast");
+  if (!S.raions) return;
+  const by = new Map();
+  for (const r of S.raions.raions) {
+    const v = by.get(r.oblast) || { uk: r.oblast_uk, n: 0, on: 0 };
+    v.n += 1; v.on += r.live?.active ? 1 : 0;
+    by.set(r.oblast, v);
+  }
+  const opts = [...by.entries()].sort((a, b) => (b[1].on - a[1].on) || a[1].uk.localeCompare(b[1].uk, "uk"));
+  const html = `<option value="">усі області</option>` + opts.map(([o, v]) =>
+    `<option value="${esc(o)}">${esc(o === "Kyiv City" ? "м. Київ" : v.uk + " обл.")}${v.on ? ` · ${v.on} під тривогою` : ""}</option>`).join("");
+  if (sel.dataset.html !== html) { sel.innerHTML = html; sel.dataset.html = html; sel.value = S.zoomOblast; }
+  const n = activeRaions().length;
+  $("#zoom-alerts").disabled = false;
+  $("#zoom-alerts").title = liveRaions() ? (n ? `Наблизити до ${n} ${plural(n, "району", "районів", "районів")} під тривогою` : "Зараз жоден район не під тривогою")
+    : "Немає живих даних по районах (потрібен токен alerts.in.ua)";
+}
+
+function buildRaionMap() {
+  const svg = $("#map");
+  const g = S.rgeo;
+  const keep = S.vb && S.full && S.full.join(" ") === g.viewBox ? S.vb : null;
+  setFullView(g.viewBox);
+  if (keep) applyViewBox(keep);
+  svg.innerHTML = "";
+  svg.classList.add("raion-mode");
+  svg.setAttribute("aria-label", "Мапа районів України");
+  mapDefs(svg);
+  const gR = el("g", { id: "raion-layer" }, svg);
+  for (const [id, r] of Object.entries(g.raions)) {
+    const known = !!raionById(id);
+    const p = el("path", { d: r.d, class: known ? "reg rn" : "nodata rn", "data-rid": id }, gR);
+    if (known) { p.setAttribute("tabindex", "0"); p.setAttribute("role", "button"); }
+  }
+  el("path", { d: g.oblast_borders, class: "obl-border" }, svg);
+  el("g", { id: "labels" }, svg);
+  $("#attr").textContent = g.attribution;
+}
+
+function raionFill(r) {
+  if (!r) return css("--calm");
+  if (S.layer === "now") {
+    const lv = r.live;
+    if (!lv?.active) return css("--calm");
+    return lv.level === "hromada" ? "url(#part)" : css("--alert");
+  }
+  const p = r.probs?.[rTarget()]?.[S.horizon];
+  return p == null ? css("--calm") : rampColor(p);
+}
+
+function paintRaions() {
+  const svg = $("#map");
+  let sel = null;
+  for (const node of svg.querySelectorAll("[data-rid]")) {
+    const r = raionById(node.dataset.rid);
+    if (!r) continue;
+    node.style.fill = raionFill(r);
+    node.classList.toggle("sel", r.id === S.rsel);
+    if (r.id === S.rsel) sel = node;
+    const p = r.probs?.[rTarget()]?.[S.horizon];
+    node.setAttribute("aria-label", `${r.name_uk}: ${S.layer === "now" ? (r.live?.active ? LEVEL_PHRASE[r.live.level] || "тривога" : "немає тривоги") : pct(p)}`);
+  }
+  if (sel) sel.parentNode.appendChild(sel);  // selected outline on top of its neighbours
+  paintRaionLabels();
+  paintLegend();
+  renderZoomOblasts();
+}
+
+// Probability labels only when zoomed in enough to read them.
+function paintRaionLabels() {
+  const labels = $("#labels");
+  if (!labels || S.unit !== "raion" || !S.rgeo) return;
+  labels.innerHTML = "";
+  const k = S.full[2] / S.vb[2];
+  if (S.layer === "now" || k < 2.2) return;
+  const [x0, y0, w, h] = S.vb;
+  for (const r of S.raions.raions) {
+    const at = raionGeo(r.id)?.label;
+    if (!at || at[0] < x0 || at[0] > x0 + w || at[1] < y0 || at[1] > y0 + h) continue;
+    const p = r.probs?.[rTarget()]?.[S.horizon];
+    if (p == null) continue;
+    const t = el("text", { x: at[0], y: at[1], "text-anchor": "middle", "dominant-baseline": "middle",
+      class: "lbl rl" + (invText(p) ? " inv" : ""), style: `font-size:${(15 / k).toFixed(2)}px;stroke-width:${(3 / k).toFixed(2)}px` }, labels);
+    t.textContent = pct(p);
+  }
+}
+
+function raionTipHTML(r, id) {
+  if (!r) {
+    const g = raionGeo(id);
+    return g ? `<b>${esc(g.name_uk)}</b><br>немає даних` : null;
+  }
+  const head = `<b>${esc(r.name_uk)}</b> <span class="tipsub">${esc(r.oblast === "Kyiv City" ? "" : r.oblast_uk + " обл.")}</span>`;
+  if (S.layer === "now") {
+    if (!r.live) return `${head}<br>немає живих даних`;
+    return `${head}<br>${r.live.active ? `${LEVEL_PHRASE[r.live.level] || "тривога"}${r.live.since ? ", " + duration(r.live.since) : ""}` : "тривоги немає"}`;
+  }
+  const t = rTarget(), p = r.probs?.[t]?.[S.horizon];
+  return `${head}<br>${pct(p)}, ${p == null ? "" : LEVELS[levelIdx(p)][1]} ймовірність<br><span class="tipsub">${METHOD_SHORT[r.method?.[t]?.[S.horizon]] || ""}</span>`;
+}
+
+async function selectRaion(id, { zoom = false } = {}) {
+  if (S.unit !== "raion") await setUnit("raion");
+  S.rsel = id;
+  if (location.hash !== `#raion/${id}`) history.replaceState(null, "", `#raion/${id}`);
+  paintMap();
+  renderRank();
+  if (zoom) zoomTo(raionGeo(id).bbox);
+  await renderRaionDetailById(id);
+  if (window.matchMedia("(max-width: 900px)").matches) $("#detail").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function renderRaionDetailById(id) {
+  try {
+    const d = await getJSON(`/api/raions/${encodeURIComponent(id)}`);
+    if (S.rsel === id) renderRaionDetail(d);
+  } catch (e) {
+    $("#detail").innerHTML = `<p class="muted">Не вдалося завантажити дані району.</p>`;
+  }
+}
+
+function renderRaionDetail(d) {
+  const lv = d.live;
+  const status = !lv
+    ? `<span class="status off"><span class="b"></span>Немає живих даних по районах</span>`
+    : lv.active
+      ? `<span class="status on"><span class="b"></span>${LEVEL_PHRASE[lv.level] || "Тривога"}${lv.since ? ` з ${fmtTime.format(new Date(lv.since))}, ${duration(lv.since)}` : ""}</span>`
+      : `<span class="status off"><span class="b"></span>Тривоги немає</span>`;
+  const locs = lv?.locations?.length ? `<p class="small muted">Під тривогою: ${lv.locations.map(esc).join(", ")}</p>` : "";
+  const hs = Object.keys(d.probs.active).map(Number);
+  const bar = (p) => (p == null ? "–" : `<div class="pbar"><div class="track"><div class="fill" style="width:${Math.round(p * 100)}%;background:${rampColor(Math.max(p, 0.15))}"></div></div><span class="num">${pct(p)}</span></div>`);
+  const w = d.windows;
+  const methods = new Set(["active", "onset"].flatMap((t) => hs.map((h) => d.method[t][h])));
+  const tag = (m) => `<span class="mtag m-${m}">${METHOD_SHORT[m] || m}</span>`;
+  const rows = hs.map((h) => `<tr><td class="h">${h} год<br><span class="small">${fmtTime.format(new Date(w[h].active[0]))}–${fmtTime.format(new Date(w[h].active[1]))}</span></td>
+      <td>${bar(d.probs.active[h])}</td><td>${bar(d.probs.onset[h])}</td></tr>`).join("");
+  const h3 = hs.includes(3) ? 3 : hs[0];
+  const ob = d.oblast_probs;
+  const cmp = ob && d.oblast !== "Kyiv City" ? `<p class="small muted">Для всієї ${esc(d.oblast_uk)} області: тривога в наступну годину ${pct(ob.active[1])}, нова тривога за ${h3} год ${pct(ob.onset[h3])}.</p>` : "";
+  const sp = d.share_period;
+  const shareNote = methods.has("oblast_x_share") && sp
+    ? `<p class="small muted">Частка району: скільки тривог області за 28 днів (${fmtDay.format(new Date(sp[0]))} – ${fmtDay.format(new Date(sp[1]))}) зачепили цей район:
+       ${pct(d.share?.onset_h3)} для «нової тривоги за ${h3} год».${shareStale(sp) ? " <b>Оцінка застаріла:</b> новіших районних даних немає." : ""}</p>` : "";
+  const ev = d.evaluation;
+  let evHTML = "";
+  if (ev?.scores?.length) {
+    const get = (t, h, m) => ev.scores.find((x) => x.target === t && x.horizon_h === h && x.model === m);
+    const per = ev.test ? `${fmtDay.format(new Date(ev.test[0]))} – ${fmtDay.format(new Date(ev.test[1]))}` : "";
+    // a share estimated long ago is scored by its stale variant (share from 30 days earlier)
+    const evalName = (m) => (m === "oblast_x_share" && shareStale(d.share_period) ? "oblast_x_share_stale30" : m);
+    const line = (t, h) => {
+      const m = d.method[t][h];
+      const r = get(t, h, evalName(m)), o = get(t, h, "oblast");
+      return r ? `<tr><td>${t === "active" ? `Тривога в ${h}-у год` : `Нова за ${h} год`}</td><td>${tag(m)}</td>
+        <td class="${r.bss_vs_clim > 0 ? "pos" : "neg"}">${signedPct(r.bss_vs_clim)}</td><td>${o ? signedPct(o.bss_vs_clim) : "–"}</td></tr>` : "";
+    };
+    const obl = (ev.oblast || []).find((x) => x.target === "onset" && x.horizon_h === 3);
+    evHTML = `<h3>Наскільки цьому можна вірити</h3>
+      <p class="small muted">Перевірка на ${per} (останні 4 тижні з районними даними), усі райони разом. Перевага над кліматологією району за Brier score:</p>
+      <div class="tablewrap"><table class="mt"><thead><tr><th></th><th>Метод</th><th>Перевага</th><th>Просто прогноз області</th></tr></thead>
+      <tbody>${line("active", 1)}${line("onset", 1)}${line("onset", 3)}${line("onset", 6)}</tbody></table></div>
+      ${obl && obl[`bss_${evalName(d.method.onset[3])}`] !== undefined ? `<p class="small muted">Райони ${esc(d.oblast_uk)} області, нова тривога за 3 год: частота ${pct(obl.base_rate)}, перевага
+        ${signedPct(obl[`bss_${evalName(d.method.onset[3])}`])} (метод «${METHOD_SHORT[d.method.onset[3]]}»).</p>` : ""}`;
+  }
+  $("#detail").innerHTML = `
+    <p class="crumbs small"><a href="#region/${esc(d.oblast_id)}" data-oblast="${esc(d.oblast_id)}">${esc(d.oblast === "Kyiv City" ? "м. Київ" : d.oblast_uk + " область")}</a> › район</p>
+    <h2>${esc(d.name_uk)}</h2>${status}${locs}
+    <p class="small muted">${d.live_source ? `Стан за alerts.in.ua, ${fmtTime.format(new Date(d.live_as_of))}` : "Живий стан районів зʼявляється, коли сервер має токен alerts.in.ua"};
+      прогноз станом на ${d.origin_kyiv} за Києвом.</p>
+    <div class="detail-actions"><button type="button" class="zbtn" id="zoom-this">Наблизити до району</button></div>
+    <h3>Прогноз для району</h3>
+    <p class="small">Звідки: ${[...methods].map(tag).join(" ")}</p>
+    <table class="probs"><thead><tr><th></th><th>Тривога в цю годину</th><th>Нова тривога за цей час</th></tr></thead><tbody>${rows}</tbody></table>
+    <p class="small muted">${[...methods].map((m) => `«${METHOD_SHORT[m]}»: ${esc(d.methods?.[m] || "")}`).join("<br>")}</p>
+    ${cmp}${shareNote}${evHTML}`;
+  $("#zoom-this").addEventListener("click", () => zoomTo(raionGeo(d.id).bbox));
+  $("#detail .crumbs a").addEventListener("click", (ev) => { ev.preventDefault(); setUnit("oblast").then(() => select(d.oblast_id)); });
+}
+
+function renderRaionRank() {
+  const t = $("#rank");
+  const rs = S.raions?.raions || [];
+  const hs = S.forecast?.horizons || [1, 2, 3, 6];
+  const h3 = hs.includes(3) ? 3 : hs[0];
+  const ob = S.zoomOblast;
+  const key = S.layer === "now" ? (r) => (r.live?.active ? 2 : 0) + (r.probs.active[1] ?? 0) : (r) => r.probs[rTarget()][S.horizon] ?? -1;
+  const rows = rs.filter((r) => !ob || r.oblast === ob).sort((a, b) => key(b) - key(a));
+  const cell = (p) => (p == null ? "–" : `<span class="cell" style="background:${rampColor(p)};color:${invText(p) ? "#fff" : "inherit"}">${pct(p)}</span>`);
+  t.innerHTML = `<thead><tr><th>Район</th><th>Тривога в 1-у год</th><th>Нова за ${h3} год</th><th>Нова за ${hs[hs.length - 1]} год</th><th>Звідки прогноз</th></tr></thead>
+    <tbody>${rows.map((r) => `<tr data-rid="${r.id}" tabindex="0" class="${r.id === S.rsel ? "sel" : ""}">
+      <td>${esc(r.name_uk)}<span class="small muted"> · ${esc(r.oblast === "Kyiv City" ? "" : r.oblast_uk)}</span>${r.live?.active ? `<span class="badge">${r.live.level === "hromada" ? "частково" : "тривога"}</span>` : ""}</td>
+      <td>${cell(r.probs.active[1])}</td><td>${cell(r.probs.onset[h3])}</td><td>${cell(r.probs.onset[hs[hs.length - 1]])}</td>
+      <td class="small muted">${METHOD_SHORT[r.method.onset[h3]] || ""}</td></tr>`).join("")}</tbody>`;
+  $("#rank-title").textContent = ob ? `Райони: ${ob === "Kyiv City" ? "м. Київ" : rs.find((r) => r.oblast === ob)?.oblast_uk + " область"}` : "Усі райони";
+  $("#rank-sub").textContent = S.raions?.origin ? `прогноз станом на ${fmtFull.format(new Date(S.raions.origin))} за Києвом` : "";
+}
+
 // ---------------------------------------------------------------- views & loading
 function setView() {
   const h = location.hash.replace("#", "") || "map";
   const [view, arg] = h.split("/");
-  S.view = view === "region" ? "map" : (["map", "metrics", "about"].includes(view) ? view : "map");
+  S.view = ["region", "raion"].includes(view) ? "map" : (["map", "metrics", "about"].includes(view) ? view : "map");
   for (const a of document.querySelectorAll(".tabs a")) a.setAttribute("aria-current", a.dataset.view === S.view ? "page" : "false");
   for (const v of ["map", "metrics", "about"]) $(`#view-${v}`).hidden = v !== S.view || (v !== "about" && !$("#loading").hidden);
   if (S.view === "metrics" && $("#loading").hidden) renderMetrics();
-  if (view === "region" && arg && arg !== S.selected && S.forecast) select(arg);
+  if (view === "region" && arg && S.forecast) {
+    if (S.unit === "raion") setUnit("oblast").then(() => select(arg)); else if (arg !== S.selected) select(arg);
+  }
+  if (view === "raion" && arg && arg !== S.rsel && S.raions) selectRaion(arg);
 }
 
 function render() {
@@ -749,13 +1120,17 @@ function render() {
 
 async function refresh() {
   try {
-    const [st, fc] = await Promise.all([getJSON("/api/state"), getJSON("/api/forecast")]);
+    const [st, fc, rs] = await Promise.all([getJSON("/api/state"), getJSON("/api/forecast"),
+      getJSON("/api/raions").catch(() => null)]);  // raion layer is optional
     const firstLoad = !S.forecast;
-    S.state = st; S.forecast = fc;
+    S.state = st; S.forecast = fc; S.raions = rs;
+    $("#unit").hidden = !rs;
+    if (!rs && S.unit === "raion") S.unit = "oblast";
     $("#loading").hidden = true;
     if (firstLoad) { buildMap(); setView(); }
     render();
-    if (S.selected && !firstLoad) {
+    if (!firstLoad && S.unit === "raion" && S.rsel) renderRaionDetailById(S.rsel);
+    else if (S.selected && !firstLoad && S.unit === "oblast") {
       const d = await getJSON(`/api/regions/${S.selected}`).catch(() => null);
       if (d) renderDetail(d);
     }
@@ -775,14 +1150,23 @@ async function refresh() {
 async function main() {
   readRamp();
   setupControls();
+  setupMapEvents();
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { readRamp(); if (S.geo) { buildMap(); render(); } });
   window.addEventListener("hashchange", setView);
-  $("#rank").addEventListener("click", (ev) => { const tr = ev.target.closest("tr[data-id]"); if (tr) select(tr.dataset.id); });
-  $("#rank").addEventListener("keydown", (ev) => { const tr = ev.target.closest("tr[data-id]"); if (tr && ev.key === "Enter") select(tr.dataset.id); });
+  const pick = (tr) => (tr.dataset.rid ? selectRaion(tr.dataset.rid) : select(tr.dataset.id));
+  $("#rank").addEventListener("click", (ev) => { const tr = ev.target.closest("tr[data-id], tr[data-rid]"); if (tr) pick(tr); });
+  $("#rank").addEventListener("keydown", (ev) => { const tr = ev.target.closest("tr[data-id], tr[data-rid]"); if (tr && ev.key === "Enter") pick(tr); });
   $("#search").addEventListener("change", (ev) => {
     const q = ev.target.value.trim().toLowerCase();
-    const r = S.forecast?.regions.find((x) => x.name_uk.toLowerCase() === q) || S.forecast?.regions.find((x) => x.name_uk.toLowerCase().startsWith(q));
-    if (r) { select(r.id); ev.target.value = ""; ev.target.blur(); }
+    if (!q) return;
+    const r = S.forecast?.regions.find((x) => x.name_uk.toLowerCase() === q);
+    const rr = S.raions?.raions.find((x) => x.name_uk.toLowerCase() === q)
+      || (!r && S.raions?.raions.find((x) => x.name_uk.toLowerCase().startsWith(q)));
+    const r2 = r || (!rr && S.forecast?.regions.find((x) => x.name_uk.toLowerCase().startsWith(q)));
+    if (rr) selectRaion(rr.id, { zoom: true });
+    else if (r2) { if (S.unit === "raion") setUnit("oblast").then(() => select(r2.id)); else select(r2.id); }
+    else return;
+    ev.target.value = ""; ev.target.blur();
   });
   S.geo = await getJSON("static/ukraine-map.json");
   setView();
@@ -793,6 +1177,8 @@ async function main() {
   }
   const first = location.hash.match(/^#region\/(.+)$/);
   if (first) select(first[1]);
+  const firstRaion = location.hash.match(/^#raion\/(.+)$/);
+  if (firstRaion && S.raions) selectRaion(firstRaion[1], { zoom: true });
   setInterval(async () => {
     const prevOrigin = S.forecast?.origin;
     await refresh();
