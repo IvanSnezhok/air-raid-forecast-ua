@@ -323,7 +323,8 @@ def store_records(root: Path | str, as_of: pd.Timestamp, since: pd.Timestamp) ->
     pulls = store.load(root, "history_pulls", as_of=as_of)
     raw = store.load(root, "alerts_history", as_of=as_of, raw=True)
     pulled = pd.concat([pulls[pulls["status"].isin([200, 304])][["uid", "fetched_at"]] if len(pulls) else None,
-                        raw.rename(columns={"requested_uid": "uid"})[["uid", "fetched_at"]] if len(raw) else None,
+                        raw[["requested_uid", "fetched_at"]].rename(columns={"requested_uid": "uid"})
+                        if len(raw) and "requested_uid" in raw else None,
                         pd.DataFrame(columns=["uid", "fetched_at"])])
     if len(pulled):
         pulled = pulled.groupby("uid")["fetched_at"].max()
