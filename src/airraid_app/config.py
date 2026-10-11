@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from airraid.data import RAW_PATH
+from airraid.raion_data import OFFICIAL_PATH
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -21,6 +22,10 @@ class Settings:
     model_dir: Path = ROOT / "var" / "models"
     state_dir: Path = ROOT / "var" / "state"  # live alert log and forecast journal
     reports_dir: Path = ROOT / "reports"
+    # Raion-level history: the official alert file (stopped 2026-09-07) and, when
+    # available, the live alert store written by the collector (airraid.store).
+    official_path: Path = OFFICIAL_PATH
+    store_dir: Path | None = None
     # Threat-type forecast CSV (path or URL) from threat-type/predict_type_now.py; optional.
     type_forecast: str | None = None
     # Live alert state. Never commit the token; set it as an env var / secret.
@@ -51,6 +56,10 @@ class Settings:
             s.state_dir = Path(v)
         if v := env.get("AIRRAID_REPORTS_DIR"):
             s.reports_dir = Path(v)
+        if v := env.get("AIRRAID_OFFICIAL_PATH"):
+            s.official_path = Path(v)
+        if v := env.get("AIRRAID_STORE_DIR"):
+            s.store_dir = Path(v)
         s.alerts_token = env.get("ALERTS_IN_UA_TOKEN") or None
         local_types = ROOT / "threat-type" / "reports" / "type_forecast_now.csv"
         s.type_forecast = env.get("AIRRAID_TYPE_FORECAST") or (str(local_types) if local_types.exists() else None)
