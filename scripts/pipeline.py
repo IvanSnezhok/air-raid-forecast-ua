@@ -300,7 +300,7 @@ def keepalive_decision(enabled: bool, hop: int, max_hops: int, newer_runs: list[
 def cmd_keepalive(a) -> None:
     enabled = os.environ.get("KEEPALIVE", "on").strip().lower() not in ("off", "false", "0", "no")
     ref = os.environ["GITHUB_REF_NAME"]
-    on_default = ref == os.environ.get("DEFAULT_BRANCH", "main")
+    on_default = ref == (os.environ.get("DEFAULT_BRANCH") or "main")
     max_hops = int(os.environ.get("MAX_HOPS") or (72 if on_default else 1))
     hop = int(os.environ.get("HOP") or 0)
     ok, why = keepalive_decision(enabled, hop, max_hops, [])
