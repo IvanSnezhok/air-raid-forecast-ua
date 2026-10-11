@@ -11,6 +11,8 @@ start, with a 6-hour embargo.
 
 Methods compared for each target (active / onset) and horizon:
   climatology_28d   the raion's own same-hour share of the last 28 days (reference for skill)
+  rate_28d          the raion's event rate over the last 28 days at any hour (a less noisy
+                    baseline for single raions; reported, not served)
   persistence       0/1: raion under alert now / alert started in the last h hours
   oblast            the oblast model's probability for the raion's oblast, as is
   oblast_x_share    oblast probability x trailing 28-day ratio of raion events to
@@ -73,7 +75,7 @@ WINDOWS_MONTHS = [3, 6, 9]
 MAX_OBLAST_MONTHS = 24  # same cap as the web app (Settings.max_train_months)
 GRID_SINCE = pd.Timestamp("2025-08-01", tz="UTC")
 TARGETS = {"active": ("hod_clim_28d", "active_now"), "onset": ("onset_clim_28d", "onset_last_h")}
-METHODS = ["climatology_28d", "persistence", "oblast", "oblast_x_share", "oblast_x_share_stale30", "lightgbm_state", "lightgbm"]
+METHODS = ["climatology_28d", "rate_28d", "persistence", "oblast", "oblast_x_share", "oblast_x_share_stale30", "lightgbm_state", "lightgbm"]
 STALE_H = 30 * 24
 TIERS = {
     "history": ["lightgbm", "lightgbm_state", "oblast_x_share", "oblast"],
@@ -81,6 +83,16 @@ TIERS = {
     "none": ["oblast_x_share_stale30", "oblast"],
 }
 KEEP = ["origin_hour", "region", "horizon"]
+
+
+def trailing_rate(y: np.ndarray, h: int, window: int = 28 * 24) -> np.ndarray:
+    """[R, n] labels of consecutive origins -> mean over the origins i-window .. i-h (label known at i)."""
+    yz = np.nan_to_num(y.astype(np.float64))
+    c = np.concatenate([np.zeros((yz.shape[0], 1)), np.cumsum(yz, axis=1)], axis=1)
+    out = np.full(yz.shape, np.nan)
+    i = np.arange(window, yz.shape[1])
+    out[:, i] = (c[:, i - h + 1] - c[:, i - window]) / (window - h + 1)
+    return out
 
 
 def model_view(df: pd.DataFrame, kind: str) -> pd.DataFrame:
@@ -167,7 +179,12 @@ def main():
     ap.add_argument("--reuse-oblast", action="store_true", help="reuse cached oblast-model predictions")
     ap.add_argument("--horizons", default=",".join(map(str, HORIZONS)), help="smoke runs: e.g. 1")
     ap.add_argument("--windows", default=",".join(map(str, WINDOWS_MONTHS)), help="training windows (months) to try")
+    ap.add_argument("--rescore", action="store_true",
+                    help="rebuild the report from the cached test predictions (adds baselines computed from labels)")
     args = ap.parse_args()
+    if args.rescore:
+        rescore()
+        return
     horizons = [int(x) for x in args.horizons.split(",")]
     windows = [int(x) for x in args.windows.split(",")]
     REPORTS.mkdir(parents=True, exist_ok=True)
@@ -218,6 +235,7 @@ def main():
         for t, (clim_col, pers_col) in TARGETS.items():
             y = labels(g, K, h, H, t, S)
             yo = oblast_labels(inp, K, h, t)
+            rate = trailing_rate(y.reshape(R, len(K)), h).reshape(-1)
             share2 = trailing_share(y.reshape(R, len(K)), yo, h)
             share = share2.reshape(-1)
             stale = np.full_like(share2, np.nan)
@@ -264,7 +282,8 @@ def main():
                 out = pd.DataFrame({
                     "origin": g.t0 + pd.to_timedelta(origin[te], unit="h"), "raion": df.loc[te, "region"].to_numpy(),
                     "target": t, "horizon": h, "fold": i, "y": y[te], "active_now": df.loc[te, "active_now"].to_numpy(),
-                    "climatology_28d": df.loc[te, clim_col].to_numpy(), "persistence": df.loc[te, pers_col].to_numpy(),
+                    "climatology_28d": df.loc[te, clim_col].to_numpy(), "rate_28d": rate[te],
+                    "persistence": df.loc[te, pers_col].to_numpy(),
                     "oblast": p_obl[te], "share": share[te], "oblast_x_share": p_obl[te] * share[te],
                     "oblast_x_share_stale30": p_obl[te] * stale[te],
                 })
@@ -288,7 +307,30 @@ def main():
     log("done")
 
 
-def report(P, selection, cov, agree, importances, split):
+def rescore():
+    """Report from var/raion_eval/test_predictions.parquet (no refits); adds rate_28d if missing."""
+    summary = json.loads((REPORTS / "summary.json").read_text())
+    P = pd.read_parquet(CACHE / "test_predictions.parquet")
+    if "rate_28d" not in P:
+        raw = read_official()
+        ra = load_official(raw=raw, since=GRID_SINCE)
+        inp = make_inputs(ra[ra["start"] >= GRID_SINCE], load_alerts(), pd.Timestamp(summary["split"]["data_end"]))
+        g = inp.grid
+        idx = {r: i for i, r in enumerate(g.regions)}
+        P["rate_28d"] = np.nan
+        for (t, h), q in P.groupby(["target", "horizon"]):
+            k0 = g.minute(q["origin"].min()) // 60 - 28 * 24 - h
+            K = np.arange(k0, g.minute(q["origin"].max()) // 60 + 1)
+            rate = trailing_rate(labels(g, K, h, inp.H, t, inp.S).reshape(len(g.regions), len(K)), h)
+            ko = ((q["origin"] - g.t0) / pd.Timedelta(hours=1)).round().astype(int).to_numpy() - k0
+            P.loc[q.index, "rate_28d"] = rate[q["raion"].map(idx).to_numpy(), ko]
+        P.to_parquet(CACHE / "test_predictions.parquet")
+    imp = pd.read_csv(REPORTS / "feature_importance_top30.csv", index_col=0)
+    report(P, summary["selection"], None, None, None, summary["split"], importance=imp)
+    log("rescored")
+
+
+def report(P, selection, cov, agree, importances, split, importance=None):
     if P[METHODS].isna().any().any():
         raise RuntimeError("missing predictions in the test set")
     rows, by_obl = [], []
@@ -309,11 +351,12 @@ def report(P, selection, cov, agree, importances, split):
     M, B = pd.DataFrame(rows), pd.DataFrame(by_obl)
     M.to_csv(REPORTS / "metrics_test.csv", index=False)
     B.round(4).to_csv(REPORTS / "by_oblast.csv", index=False)
-    I = pd.concat(importances, axis=1)
-    imp = pd.DataFrame({k: I[[c for c in I.columns if c.startswith(k + "_")]].mean(axis=1)
-                        for k in ("lightgbm", "lightgbm_state")})
-    imp = imp.sort_values("lightgbm", ascending=False)
-    imp.head(30).round(1).to_csv(REPORTS / "feature_importance_top30.csv")
+    if importance is None:
+        I = pd.concat(importances, axis=1)
+        imp = pd.DataFrame({k: I[[c for c in I.columns if c.startswith(k + "_")]].mean(axis=1)
+                            for k in ("lightgbm", "lightgbm_state")})
+        imp = imp.sort_values("lightgbm", ascending=False)
+        imp.head(30).round(1).to_csv(REPORTS / "feature_importance_top30.csv")
     (REPORTS / "summary.json").write_text(json.dumps({"split": split, "selection": selection}, indent=2, default=str))
     with open(REPORTS / "metrics_test.md", "w") as f:
         f.write(f"Raion-level test (walk-forward, weekly refit): origins {split['test'][0]} .. {split['test'][1]} UTC, "
