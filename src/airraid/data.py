@@ -93,18 +93,35 @@ def _merge(starts: np.ndarray, ends: np.ndarray) -> tuple[np.ndarray, np.ndarray
     return np.array(out_s, dtype=np.int64), np.array(out_e, dtype=np.int64)
 
 
+def grid_start(alerts: pd.DataFrame, data_end: pd.Timestamp) -> pd.Timestamp:
+    """t0 of the grid: midnight before the first alert, shifted back so that t0 has
+    the same minute of the hour as `data_end`.
+
+    Every hour index k then means the 60-minute block [t0 + k h, t0 + (k+1) h),
+    and the blocks end exactly at `data_end`. For a forecast origin at 14:20 the
+    "hour before the origin" is 13:20-14:20, the label "alert in hour 1" covers
+    14:20-15:20, and so on: the same meaning as for an origin at 14:00.
+    For a top-of-hour `data_end` this is the plain midnight (no shift).
+    """
+    phase = int((data_end - data_end.floor("h")) / pd.Timedelta(minutes=1))
+    return alerts["start"].min().floor("D") - pd.Timedelta(minutes=(60 - phase) % 60)
+
+
 def build_grid(alerts: pd.DataFrame, data_end: pd.Timestamp | None = None) -> AlertGrid:
     """Rasterise alerts onto a minute grid.
 
     `data_end` is the moment up to which we treat the data as complete. Anything
     after it is unknown, so alerts are clipped there. Passing an earlier
     `data_end` simulates what the data looked like at that moment; the leakage
-    test uses this.
+    test uses this. `data_end` need not be on the hour: the grid's hour blocks
+    are aligned to end at it (see `grid_start`), which is how forecasts are made
+    from any minute (sub-hour origins).
     """
     if data_end is None:
         data_end = alerts["start"].max().floor("h")
+    data_end = data_end.floor("min")
     alerts = alerts[alerts["start"] < data_end]
-    t0 = alerts["start"].min().floor("D")
+    t0 = grid_start(alerts, data_end)
     n_minutes = int((data_end - t0) / pd.Timedelta(minutes=1))
     regions = sorted(alerts["region"].unique())
     active = np.zeros((len(regions), n_minutes), dtype=bool)
