@@ -24,6 +24,8 @@ jobs:
         run: pytest tests/app -q
       - name: No-leakage tests (downloads the dataset)
         run: pytest tests/test_leakage.py -q
+      - name: Live data (merge definition, point-in-time store, verification)
+        run: pytest tests/test_live_alerts.py tests/test_store.py tests/test_verify.py -q
       - name: Threat-type no-leakage tests
         run: pytest threat-type/tests -q
       - name: Docker image builds
