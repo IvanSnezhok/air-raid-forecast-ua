@@ -22,8 +22,9 @@ forecast time, so the validation month picks the best method for three tiers
   * `none`: neither; only the oblast forecast and a (stale) raion share.
 A method that cannot run (model not trained, no share) falls back to the next
 candidate of its tier and finally to `oblast`. Every value is labelled with the
-method that produced it. Kyiv City is a single unit: its raion forecast is the
-oblast forecast.
+method that produced it. Kyiv City is one unit, but its raion target follows the
+official alerts, not the volunteer channel the oblast model learns, and the raion
+models scored better there too, so it is treated like every raion.
 """
 from __future__ import annotations
 
@@ -384,7 +385,7 @@ class RaionForecaster:
                 for h in HORIZONS:
                     po = None if ob is None else ob[t].get(h)
                     p, m = po, "oblast" if po is not None else None
-                    if r.id != "kyiv-city" and po is not None:
+                    if po is not None:
                         for cand in self.chosen(t, h, tier):
                             if cand in MODEL_KINDS and h in direct[cand].get(r.id, {}).get(t, {}):
                                 p, m = direct[cand][r.id][t][h], cand

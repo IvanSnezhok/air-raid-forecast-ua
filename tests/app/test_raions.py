@@ -54,11 +54,8 @@ def test_raion_forecast_is_derived_from_the_oblast(client):
         for t in ("active", "onset"):
             for h in map(str, HORIZONS):
                 po, p = oblast[r["oblast"]][t][h], r["probs"][t][h]
-                if r["id"] == "kyiv-city":
-                    assert r["method"][t][h] == "oblast" and p == po  # the city is one unit
-                else:
-                    assert r["method"][t][h] == "oblast_x_share"
-                    assert p <= po + 1e-9 and r["share"][f"{t}_h{h}"] <= 1
+                assert r["method"][t][h] == "oblast_x_share"
+                assert p <= po + 1e-9 and r["share"][f"{t}_h{h}"] <= 1
     # the first raion of each synthetic oblast is hit much more often than the last one
     by = {r["id"]: r for r in body["raions"]}
     assert by["bohodukhivskyi"]["share"]["onset_h3"] > by["chuhuivskyi"]["share"]["onset_h3"]
@@ -145,7 +142,7 @@ def test_live_raion_state_through_the_api(settings, engine, monkeypatch, tmp_pat
         # a live poll but no recent raion history: the current-state raion model
         assert body["tier"] == "live_state"
         assert by["iziumskyi"]["method"]["active"]["1"] == "lightgbm_state"
-        assert by["kyiv-city"]["method"]["active"]["1"] == "oblast"
+        assert by["kyiv-city"]["method"]["active"]["1"] == "lightgbm_state"
         # under alert for 1.5 h at the forecast moment vs a quiet raion of the same oblast
         assert by["kharkivskyi"]["probs"]["active"]["1"] > by["iziumskyi"]["probs"]["active"]["1"] + 0.2
 

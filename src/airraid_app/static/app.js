@@ -1045,7 +1045,8 @@ function renderRaionDetail(d) {
       <td>${bar(d.probs.active[h])}</td><td>${bar(d.probs.onset[h])}</td></tr>`).join("");
   const h3 = hs.includes(3) ? 3 : hs[0];
   const ob = d.oblast_probs;
-  const cmp = ob && d.oblast !== "Kyiv City" ? `<p class="small muted">Для всієї ${esc(oblGen(d))}: тривога в наступну годину ${pct(ob.active[1])}, нова тривога за ${h3} год ${pct(ob.onset[h3])}.</p>` : "";
+  const whole = d.oblast === "Kyiv City" ? "Модель областей для м. Києва" : `Для всієї ${esc(oblGen(d))}`;
+  const cmp = ob ? `<p class="small muted">${whole}: тривога в наступну годину ${pct(ob.active[1])}, нова тривога за ${h3} год ${pct(ob.onset[h3])}.</p>` : "";
   const sp = d.share_period;
   const shareNote = methods.has("oblast_x_share") && sp
     ? `<p class="small muted">Частка району: скільки тривог області за 28 днів (${fmtDay.format(new Date(sp[0]))} – ${fmtDay.format(new Date(sp[1]))}) зачепили цей район:
@@ -1060,7 +1061,7 @@ function renderRaionDetail(d) {
     const line = (t, h) => {
       const m = d.method[t][h];
       const r = get(t, h, evalName(m)), o = get(t, h, "oblast");
-      return r ? `<tr><td>${t === "active" ? `Тривога в ${h}-у год` : `Нова за ${h} год`}</td><td>${tag(m)}</td>
+      return r ? `<tr><td>${t === "active" ? `Тривога в ${h}-у год` : `Нова за ${h} год`}</td>
         <td class="${r.bss_vs_clim > 0 ? "pos" : "neg"}">${signedPct(r.bss_vs_clim)}</td><td>${o ? signedPct(o.bss_vs_clim) : "–"}</td></tr>` : "";
     };
     const obl = (ev.oblast || []).find((x) => x.target === "onset" && x.horizon_h === 3);
@@ -1068,17 +1069,18 @@ function renderRaionDetail(d) {
     const lget = (t, h, m) => lt?.scores?.find((x) => x.target === t && x.horizon_h === h && x.model === m);
     const lline = (t, h) => {
       const m = d.method[t][h], r = lget(t, h, m), o = lget(t, h, "oblast");
-      return r ? `<tr><td>${t === "active" ? `Тривога в ${h}-у год` : `Нова за ${h} год`}</td><td>${tag(m)}</td>
+      return r ? `<tr><td>${t === "active" ? `Тривога в ${h}-у год` : `Нова за ${h} год`}</td>
         <td class="${r.bss_vs_clim > 0 ? "pos" : "neg"}">${signedPct(r.bss_vs_clim)}</td><td>${o ? signedPct(o.bss_vs_clim) : "–"}</td></tr>` : "";
     };
     const latestRows = lt ? ["active_1", "onset_1", "onset_3", "onset_6"].map((k) => lline(k.split("_")[0], Number(k.split("_")[1]))).join("") : "";
     const latestHTML = latestRows ? `<p class="small muted">Найсвіжіші тижні${lt.test ? ` (${fmtDay.format(new Date(lt.test[0]))} – ${fmtDay.format(new Date(lt.test[1]))})` : ""},
       факт за історією alerts.in.ua:</p>
-      <div class="tablewrap"><table class="mt"><thead><tr><th></th><th>Метод</th><th>Перевага</th><th>Прогноз області</th></tr></thead>
+      <div class="tablewrap"><table class="mt"><thead><tr><th></th><th>Цей метод</th><th>Прогноз області</th></tr></thead>
       <tbody>${latestRows}</tbody></table></div>` : "";
     evHTML = `<h3>Наскільки цьому можна вірити</h3>
-      <p class="small muted">Перевірка на ${per} (останні 4 тижні з районними даними), усі райони разом. Перевага над кліматологією району за Brier score:</p>
-      <div class="tablewrap"><table class="mt"><thead><tr><th></th><th>Метод</th><th>Перевага</th><th>Прогноз області</th></tr></thead>
+      <p class="small muted">Перевага над кліматологією району за Brier score (більше нуля: краще), усі райони разом.
+        Перевірка на ${per}, останні 4 тижні «офіційних» районних даних:</p>
+      <div class="tablewrap"><table class="mt"><thead><tr><th></th><th>Цей метод</th><th>Прогноз області</th></tr></thead>
       <tbody>${line("active", 1)}${line("onset", 1)}${line("onset", 3)}${line("onset", 6)}</tbody></table></div>
       ${latestHTML}
       ${obl && obl[`bss_${evalName(d.method.onset[3])}`] !== undefined ? `<p class="small muted">Райони ${esc(oblGen(d))}, нова тривога за 3 год: частота ${pct(obl.base_rate)}, перевага
