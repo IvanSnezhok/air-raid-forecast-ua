@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import sys
 import json
 import time
@@ -27,6 +28,7 @@ from airraid.features import (
 )
 from airraid.models import GBM, Climatology, LogReg, MarkovPersistence, Persistence
 from airraid.text import features as tf
+from airraid.text import lexicon as tf_lexicon
 
 ROOT = Path(__file__).resolve().parent
 REPORTS = ROOT / "reports"
@@ -104,6 +106,8 @@ def main():
                     help="available_at rules to evaluate; the first one is the main text model")
     ap.add_argument("--text-channels", default=None, help="comma-separated channels (default: all model channels)")
     ap.add_argument("--text-tag", default="", help="suffix for the ablation's output files (sensitivity runs)")
+    ap.add_argument("--text-sens", default=None,
+                    help="comma-separated target_hH (e.g. onset_h1,active_h1) where the extra rules run; default all")
     args = ap.parse_args()
     if args.download:
         download()
@@ -297,18 +301,31 @@ def text_ablation(grid, H, S, targets, val_start, test_start, test_end, args):
     variants = {"lightgbm_cov": drop_text, "lightgbm_text": lambda d: d}
     for r in rules[1:]:
         variants[f"lightgbm_text_{r}"] = lambda d, r=r: with_rule(d, r)
+    sens = set(args.text_sens.split(",")) if args.text_sens else None  # where to run the extra rules
+
+    # Cache of tree counts and fold predictions, so a run that is killed resumes, and the
+    # history-only baseline (identical whatever the channels) is fitted once. The key
+    # covers everything a prediction depends on: data end, split, coverage start, and for
+    # text models the channels, the rule, the code of the feature builder and lexicon
+    # and the posts available before the test end.
+    code = hashlib.md5(b"".join(Path(m.__file__).read_bytes() for m in (tf, tf_lexicon))).hexdigest()[:8]
+    n_posts = {r: int((p["available_at"] < test_end + pd.Timedelta(days=1)).sum()) for r, p in posts.items()}
+    base_id = f"{grid.data_end:%Y%m%d%H}_{test_start:%Y%m%d%H}_{cov_start:%Y%m%d%H}"
+    ident = {"lightgbm_cov": f"cov_{base_id}"}
+    for name, r in [("lightgbm_text", rules[0])] + [(f"lightgbm_text_{r}", r) for r in rules[1:]]:
+        ident[name] = f"text_{base_id}_{'-'.join(sorted(cov))}_{r}_{code}_{n_posts[r]}"
+    cache = REPORTS / "text_cache"
+    (cache / "pred").mkdir(parents=True, exist_ok=True)
 
     # ---- 1. trees per model on the validation month (same window for both) ----
-    sel_path = REPORTS / f"text_selection{args.text_tag}.json"
-    sel = json.loads(sel_path.read_text()) if args.reuse_selection and sel_path.exists() else {}
-    sel_key = f"{cov_start} {','.join(sorted(cov))}"
-    if sel.get("_key") != sel_key:
-        sel = {"_key": sel_key}
+    sel = {}
     for t in targets:
         for h in HORIZONS:
             for name in TEXT_MODELS:
                 key = f"{name}|{t}_h{h}"
-                if key in sel:
+                cpath = cache / f"sel_{ident[name]}_{t}_h{h}.json"
+                if cpath.exists():
+                    sel[key] = json.loads(cpath.read_text())
                     continue
                 df = data[h]
                 val = between(df, grid, val_start, test_start)
@@ -320,7 +337,8 @@ def text_ablation(grid, H, S, targets, val_start, test_start, test_end, args):
                     raise RuntimeError(f"validation AUC {s['roc_auc']:.4f} for {key}: check for leakage")
                 sel[key] = {"trees": m.n_estimators, "val_brier": s["brier"], "val_auc": s["roc_auc"]}
                 log(f"text sel {key}: trees={m.n_estimators} val brier={s['brier']:.4f} auc={s['roc_auc']:.4f}")
-                sel_path.write_text(json.dumps(sel, indent=2))
+                cpath.write_text(json.dumps(sel[key]))
+    (REPORTS / f"text_selection{args.text_tag}.json").write_text(json.dumps(sel, indent=2))
 
     # ---- 2. walk-forward on the same test weeks as the main run ----
     preds, importances = [], []
@@ -343,11 +361,22 @@ def text_ablation(grid, H, S, targets, val_start, test_start, test_end, args):
                 out["clim_ref"] = te[clim_col].to_numpy()
                 out["target"], out["horizon"], out["fold"] = t, h, i
                 for name, fx in variants.items():
+                    if name not in TEXT_MODELS and sens is not None and f"{t}_h{h}" not in sens:
+                        out[name] = np.nan
+                        continue
                     trees = sel[f"{name if name in TEXT_MODELS else 'lightgbm_text'}|{t}_h{h}"]["trees"]
-                    g = GBM(n_estimators=trees, params=params).fit(fx(tr), ytr)
-                    out[name] = g.predict(fx(te))
+                    cpath = cache / "pred" / f"{ident[name]}_{t}_h{h}_f{i}_{trees}.npy"
+                    ipath = cpath.with_suffix(".imp.csv")
+                    if cpath.exists() and (name != "lightgbm_text" or ipath.exists()):
+                        out[name] = np.load(cpath)
+                    else:
+                        g = GBM(n_estimators=trees, params=params).fit(fx(tr), ytr)
+                        out[name] = g.predict(fx(te))
+                        np.save(cpath, out[name].to_numpy())
+                        if name == "lightgbm_text":
+                            g.importance().to_csv(ipath, header=["gain"])
                     if name == "lightgbm_text":
-                        importances.append(g.importance().rename(f"{t}_h{h}_f{i}"))
+                        importances.append(pd.read_csv(ipath, index_col=0)["gain"].rename(f"{t}_h{h}_f{i}"))
                 preds.append(out)
                 log(f"text {t} h={h} fold {i}: train {len(tr):,} rows from {cov_start:%Y-%m-%d}, test {len(te):,}")
     P = pd.concat(preds, ignore_index=True)
@@ -364,6 +393,8 @@ def _text_report(P, imp, models, targets, test_start, test_end, cov_start, cov, 
     for (t, h), q in P.groupby(["target", "horizon"]):
         y, c = q["y"].to_numpy(), q["clim_ref"].to_numpy()
         for name in ["climatology_28d", *models]:
+            if name != "climatology_28d" and q[name].isna().all():
+                continue
             p = c if name == "climatology_28d" else q[name].to_numpy()
             rows.append({"target": t, "horizon_h": h, "model": name, **scores(y, p, c),
                          "calibration_error": _calibration_error(y, np.clip(p, 0, 1))})
@@ -372,6 +403,8 @@ def _text_report(P, imp, models, targets, test_start, test_end, cov_start, cov, 
             if len(m):
                 rows.append({**m.iloc[0].to_dict(), "model": "lightgbm (all history, main run)"})
         for name in models[1:]:
+            if q[name].isna().all():
+                continue
             d, lo, hi = _paired_ci(q, name, "lightgbm_cov")
             base_b = float(((q["lightgbm_cov"] - q["y"]) ** 2).mean())
             diffs.append({"target": t, "horizon_h": h, "model": name, "brier_diff_vs_cov": d,
