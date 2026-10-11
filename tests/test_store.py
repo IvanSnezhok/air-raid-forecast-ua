@@ -68,6 +68,24 @@ def test_store_records_derive_ends_from_polls_and_coverage(tmp_path):
     assert covered is None  # the polls do not reach back to `since`
 
 
+def test_store_records_coverage_from_history_pulls(tmp_path):
+    """Every oblast pulled at least once: complete up to the oldest of the latest pulls."""
+    uids = [u for u, r in OBLAST_UID.items() if r != "Luhanska oblast"]
+    for i, u in enumerate(uids):
+        row = hist_rows(ts(60 + i), finished=ts(20), uid="122").assign(requested_uid=u)
+        row["started_at"] = ts(-i)  # distinct records, as real pulls
+        store.append(tmp_path, "alerts_history", row)
+    r, covered = store_records(tmp_path, ts(200), since=ts(-60))
+    assert covered == ts(60)  # the oldest of the latest pulls
+    assert len(r) == len(uids) and (r["finished_at"] == ts(20)).all()
+    _, covered = store_records(tmp_path, ts(70), since=ts(-60))
+    assert covered is None  # at 70 not every oblast had been pulled yet
+    store.append(tmp_path, "history_pulls", pd.DataFrame({"fetched_at": [ts(300)] * len(uids), "uid": uids,
+                                                          "status": 304, "n_records": None}))
+    _, covered = store_records(tmp_path, ts(400), since=ts(-60))
+    assert covered == ts(300)  # a pull that found nothing new still counts
+
+
 # ------------------------------------------------------------- collector
 
 SECRET = "tok-SECRET-123"

@@ -194,7 +194,9 @@ alerts.in.ua history kept in the store, Sep – Oct 2026):
   for any part closes it (upstream `volunteer_etryvoga_processor.py`). Measured: 87 % of
   volunteer alert *ends* coincide with an official all-clear somewhere in the same oblast
   (97 % in Kharkivska), but only 49 % of *starts* with an official activation (the channel
-  also posts threat notices that are not sirens).
+  also posts threat notices that are not sirens). The real alerts.in.ua feed shows the same
+  (Sep 12 – Oct 11 2026): 1 % of starts match an oblast-level record, 86 % of ends an
+  all-clear of any level.
 * **Rule used** (`airraid.live_alerts.oblast_intervals` / `model_alerts`): replay every
   `air_raid` record of any level through the same rules: the latest activation starts the
   oblast alert, an all-clear for any part ends it, and with no new activation it is over
@@ -222,12 +224,13 @@ inputs rebuilt from each rule (`--model`; "state only": the running-alert featur
 | Jan–Apr 2026, official (selection) – state only | 0.1377 | 0.1455 | 0.1492 | 0.1442 | **0.1433** |
 | Jan–Apr 2026, official (selection) – all recent | 0.1377 | 0.2664 | 0.1751 | 0.1585 | **0.1517** |
 | May–Sep 2026, official – state only | 0.1399 | 0.1473 | 0.1528 | 0.1474 | **0.1458** |
-| May–Sep 2026, official – all recent | 0.1399 | 0.2895 | 0.1850 | 0.1661 | **0.1602** |
+| May–Sep 2026, official – all recent | 0.1399 | 0.2895 | 0.1849 | 0.1661 | **0.1601** |
 | Sep 20 – Oct 11 2026, alerts.in.ua – state only | 0.1643 | 0.1726 | 0.1829 | 0.1776 | 0.1730 |
-| Sep 20 – Oct 11 2026, alerts.in.ua – all recent | 0.1643 | 0.2694 | 0.2071 | 0.1922 | **0.1825** |
+| Sep 20 – Oct 11 2026, alerts.in.ua – all recent | 0.1643 | 0.2694 | 0.2069 | 0.1921 | **0.1825** |
 
-Expiries of 1, 2, 3, 6 and 12 h were tried; 1 h was best on the selection period and
-stays best on both later periods (2 h is a close second). Two honest caveats: the live
+Expiries of 1, 2, 3, 6 and 12 h were tried. On the selection period 1 h was best for
+"all recent" (0.1517 vs 0.1531 for 2 h) and within 0.0001 of the best (2 h) for "state
+only"; it is the best of the five on both later periods. Two honest caveats: the live
 rule is a noisy stand-in for the volunteer channel (active-1h Brier 0.19 vs 0.14 with
 the true volunteer state on the real feed), and on the real feed "state only" ties with
 "assume calm" (oblast only), so most of the gain comes from filling the gap. The volunteer
