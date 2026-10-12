@@ -109,3 +109,14 @@ def test_poll_runs_after_an_outage_verify_the_windows_they_cover(tmp_path):
     assert summary["pending"] == 4  # +30/+120 touch the outage, +190 is in the lead-in, +345 not over yet
     v2, _ = verify(log.assign(horizon=2), alerts, tmp_path, now=m(401))
     assert {int((r.origin - T) / pd.Timedelta(minutes=1)): r.y for r in v2.itertuples()} == {250: 1}  # 310-370 has it
+
+
+def test_site_strip_prefers_the_verified_forecast_of_each_hour():
+    from airraid.verification import site_summary
+
+    o = pd.Timestamp("2026-10-11 23:00", tz="UTC")
+    J = pd.DataFrame([{"origin": o + pd.Timedelta(minutes=m), "region": "Lvivska oblast", "target": "active",
+                       "horizon": 1, "p": 0.1, "clim": 0.2, "y": y} for m, y in ((7, np.nan), (37, 0.0), (57, np.nan))])
+    out = site_summary(J, o + pd.Timedelta(hours=2), region="Lvivska oblast")
+    assert [(x["origin"][11:16], x["y"]) for x in out["recent"]["active_h1"]] == [("23:37", 0)]
+    assert out["n_verified"] == 1 and out["n_issued"] == 3

@@ -198,8 +198,10 @@ def site_summary(J: pd.DataFrame, known: pd.Timestamp, region: str | None = None
         out[key] = _score_rows(V[V["origin"] >= ref - d]) if len(V) else []
     if region is not None:
         for t, h in (("active", 1), ("onset", 3)):
-            q = J[(J["region"] == region) & (J["target"] == t) & (J["horizon"] == h)].sort_values("origin")
-            q = q.groupby(q["origin"].dt.floor("h")).tail(1).tail(recent)  # one forecast per hour
+            q = J[(J["region"] == region) & (J["target"] == t) & (J["horizon"] == h)]
+            # one forecast per hour: the latest verified one, else the latest
+            q = q.assign(_v=q["y"].notna()).sort_values(["_v", "origin"])
+            q = q.groupby(q["origin"].dt.floor("h")).tail(1).sort_values("origin").tail(recent)
             out["recent"][f"{t}_h{h}"] = [
                 {"origin": o.isoformat(), "p": round(float(p), 3), "y": None if np.isnan(y) else int(y)}
                 for o, p, y in zip(q["origin"], q["p"], q["y"].astype(float))

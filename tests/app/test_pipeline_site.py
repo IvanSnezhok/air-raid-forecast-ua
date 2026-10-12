@@ -98,3 +98,5 @@ def test_pipeline_site_serves_the_stored_forecast(settings, tmp_path, fake_now):
     assert ver["n_verified"] == 1 and ver["n_issued"] >= 1 and ver["label_sources"] == {"store": len(v)}
     a1 = next(x for x in ver["scores_24h"] if x["target"] == "active" and x["horizon"] == 1)
     assert a1["n"] == len(log["region"].unique())
+    strip = json.loads((out2 / "api" / "regions" / "odeska.json").read_text())["verification"]["active_h1"]
+    assert [x["y"] for x in strip] == [1]  # the verified forecast is shown with its outcome
