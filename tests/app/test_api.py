@@ -90,7 +90,7 @@ def test_not_ready_returns_503(settings):
 
     with TestClient(create_app(settings, ForecastEngine(settings))) as c:
         r = c.get("/api/forecast")
-        assert r.status_code == 503 and r.json()["detail"]["code"] == {"code": "starting"}  # the UI translates the code
+        assert r.status_code == 503 and r.json()["detail"]["message_code"] == {"code": "starting"}  # the UI translates the code
         assert c.get("/api/health").json()["status"] == "starting"
 
 

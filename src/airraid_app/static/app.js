@@ -391,13 +391,26 @@ function setHover(key) {
 // while a long frontline alert is still open, so it is not used for colouring.
 const isOn = (r) => !!(r && (r.reported ?? r.active));
 
+// id -> rows, rebuilt on every refresh
+const IDX = { st: new Map(), fc: new Map(), rn: new Map() };
+function indexData() {
+  IDX.st = new Map((S.state?.regions || []).map((r) => [r.id, r]));
+  IDX.fc = new Map((S.forecast?.regions || []).map((r) => [r.id, r]));
+  IDX.rn = new Map((S.raions?.raions || []).map((r) => [r.id, r]));
+}
 function regionData(id) {
-  const st = S.state?.regions.find((r) => r.id === id);
-  const fc = S.forecast?.regions.find((r) => r.id === id);
+  const st = IDX.st.get(id), fc = IDX.fc.get(id);
   if (!st && !fc) return null;
   return { ...(fc || {}), ...(st || {}), probs: fc?.probs };
 }
-const regionByName = (name) => S.forecast?.regions.find((r) => r.name === name);
+// what the oblast panel shows from the live data: its own state and its raions' state and forecast
+const panelLive = (id, name) => JSON.stringify([IDX.st.get(id), (S.raions?.raions || []).filter((r) => r.oblast === name).map((r) => [r.live, r.probs, r.method])]);
+function clearSelection() {
+  S.selected = null; S.rsel = null; S.panel = null;
+  if (location.hash.startsWith("#region/") || location.hash.startsWith("#raion/")) history.replaceState(null, "", `${location.search}#map`);
+  $("#zoom-info").textContent = "";
+  paintMap(); renderRank(); renderPanel(); resetZoom();
+}
 
 // threat types: yellow (drones) -> red (missiles, ballistic, KAB, massed drones)
 function hexRgb(h) { h = h.replace("#", ""); return [0, 2, 4].map((j) => parseInt(h.slice(j, j + 2), 16)); }
@@ -435,15 +448,16 @@ function paintMap() {
   if (raionMode) syncGeo(svg.querySelector(".obl-border"));
   svg.classList.toggle("has-focus", !!focus);
   svg.setAttribute("aria-label", raionMode ? t("map.ariaRaions") : t("map.ariaOblasts"));
+  COL = { calm: css("--calm"), alert: css("--alert") };
   for (const node of svg.querySelectorAll(".ob[data-id]")) {
     const r = regionData(node.dataset.id);
     const isFocus = !!focus && r?.name === focus;
     node.classList.toggle("focus", isFocus);
     node.classList.toggle("sel", node.dataset.id === S.selected);
-    let fill = css("--calm"), p = null;
-    if (r && S.layer === "now") fill = isOn(r) ? css("--alert") : css("--calm");
-    else if (r && S.forecast && S.target === "type") { const x = typeAt(r); fill = x?.p_red == null ? css("--calm") : levelColor(x.p_red); }
-    else if (r && S.forecast) { p = r.probs?.[S.target]?.[S.horizon]; fill = p == null ? css("--calm") : rampColor(p); }
+    let fill = COL.calm, p = null;
+    if (r && S.layer === "now") fill = isOn(r) ? COL.alert : COL.calm;
+    else if (r && S.forecast && S.target === "type") { const x = typeAt(r); fill = x?.p_red == null ? COL.calm : levelColor(x.p_red); }
+    else if (r && S.forecast) { p = r.probs?.[S.target]?.[S.horizon]; fill = p == null ? COL.calm : rampColor(p); }
     node.style.fill = fill;
     node.setAttribute("aria-label", r ? `${oblFull(r.name)}: ${S.layer === "now" ? (isOn(r) ? t("tip.alert") : t("tip.noAlert")) : pct(p)}` : "");
     // the focused oblast is drawn by its raions; keep it out of the tab order
@@ -477,15 +491,17 @@ function paintMap() {
   renderZoomOblasts();
 }
 
+let COL = null;  // theme colours read once per paint
 function raionFill(r) {
-  if (!r) return css("--calm");
+  const c = COL || { calm: css("--calm"), alert: css("--alert") };
+  if (!r) return c.calm;
   if (S.layer === "now") {
     const lv = r.live;
-    if (!lv?.active) return css("--calm");
-    return lv.level === "hromada" ? "url(#part)" : css("--alert");
+    if (!lv?.active) return c.calm;
+    return lv.level === "hromada" ? "url(#part)" : c.alert;
   }
   const p = r.probs?.[rTarget()]?.[S.horizon];
-  return p == null ? css("--calm") : rampColor(p);
+  return p == null ? c.calm : rampColor(p);
 }
 
 // Labels keep their on-screen size while zooming: font sizes are divided by the zoom factor.
@@ -651,7 +667,7 @@ function setupControls() {
   $("#zoom-oblast").addEventListener("change", (ev) => {
     S.zoomOblast = ev.target.value;
     if (S.unit === "oblast") {
-      if (S.zoomOblast) select(slug(S.zoomOblast)); else { $("#zoom-info").textContent = ""; resetZoom(); }
+      if (S.zoomOblast) select(slug(S.zoomOblast)); else clearSelection();
       return;
     }
     renderRank();
@@ -825,7 +841,7 @@ async function select(id, { zoom = true } = {}) {
     const d = await getJSON(`/api/regions/${encodeURIComponent(id)}`);
     if (S.selected === id && !S.rsel) { S.panel = { kind: "region", data: d }; renderPanel(); }
   } catch (e) {
-    box.innerHTML = `<p class="muted">${t("err.region")}</p>`;
+    if (S.selected === id && !S.rsel) { S.panel = null; hideStats(); box.innerHTML = `<p class="muted">${t("err.region")}</p>`; }
   }
   if (window.matchMedia("(max-width: 900px)").matches) box.scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -845,7 +861,7 @@ function probsTable(d, hs) {
 }
 
 function renderDetail(d) {
-  const st = S.state?.regions.find((r) => r.id === d.id);
+  const st = IDX.st.get(d.id);
   const hs = Object.keys(d.probs.active).map(Number);
   const status = isOn(st) && !st.active
     ? `<span class="status on"><span class="b"></span>${t("status.reported")}</span>`
@@ -1387,7 +1403,7 @@ const mtag = (m) => `<span class="mtag m-${m}">${t(`method.${m}`)}</span>`;
 const shareStale = (sp) => !!sp && new Date() - new Date(sp[1]) > 3 * 864e5;
 // alert duration up to the moment the live state describes (a static page can be hours old)
 const liveTo = () => (S.raions?.live_as_of ? new Date(S.raions.live_as_of) : new Date());
-const raionById = (id) => S.raions?.raions.find((r) => r.id === id);
+const raionById = (id) => IDX.rn.get(id);
 const rTarget = () => (S.target === "type" ? "active" : S.target);
 const liveRaions = () => !!S.raions?.live_source;
 const activeRaions = (oblast = "") => (S.raions?.raions || []).filter((r) => r.live?.active && (!oblast || r.oblast === oblast));
@@ -1467,7 +1483,7 @@ async function renderRaionDetailById(id) {
     const d = await getJSON(`/api/raions/${encodeURIComponent(id)}`);
     if (S.rsel === id) { S.panel = { kind: "raion", data: d }; renderPanel(); }
   } catch (e) {
-    $("#detail").innerHTML = `<p class="muted">${t("err.raion")}</p>`;
+    if (S.rsel === id) { S.panel = null; hideStats(); $("#detail").innerHTML = `<p class="muted">${t("err.raion")}</p>`; }
   }
 }
 
@@ -1543,7 +1559,7 @@ function renderRaionDetail(d) {
 function renderRaionRank() {
   const tb = $("#rank");
   const rs = S.raions?.raions || [];
-  const hs = S.forecast?.horizons || [1, 2, 3, 6];
+  const hs = S.raions?.horizons || S.forecast?.horizons || [1, 2, 3, 6];
   const h3 = hs.includes(3) ? 3 : hs[0];
   const ob = S.zoomOblast;
   const key = S.layer === "now" ? (r) => (r.live?.active ? 2 : 0) + (r.probs.active[1] ?? 0) : (r) => r.probs[rTarget()][S.horizon] ?? -1;
@@ -1582,9 +1598,9 @@ function render() {
   $("#foot-status").textContent = up ? t("foot.updated", { time: fmtTime.format(up) }) + (staleWarning() ? ` ${t("foot.stale")}` : "") : "";
 }
 
-function loadingText(detail) {
-  const c = detail?.code;
-  if (c?.code) return t(`load.${c.code}`, { n: c.n ?? "", total: c.total ?? "", error: esc(c.error || "") }) + (c.n != null ? ` (${c.n}/${c.total})` : "");
+function loadingText(detail) {  // shown with textContent
+  const c = detail?.message_code;
+  if (c?.code) return t(`load.${c.code}`, { n: c.n ?? "", total: c.total ?? "", error: c.error || "" }) + (c.n != null ? ` (${c.n}/${c.total})` : "");
   return detail?.status ? t(`load.${detail.status}`) : t("load.preparing");
 }
 
@@ -1594,7 +1610,9 @@ async function refresh() {
       getJSON("/api/raions").catch(() => null),  // raion layer is optional
       getJSON("/api/status").catch(() => null)]);
     const firstLoad = !S.forecast;
+    const before = S.panel?.kind === "region" ? panelLive(S.panel.data.id, S.panel.data.name) : null;
     S.state = st; S.forecast = fc; S.raions = rs; S.status = status;
+    indexData();
     $("#unit").hidden = !rs;
     if (!rs && S.unit === "raion") S.unit = "oblast";
     $("#loading").hidden = true;
@@ -1604,8 +1622,8 @@ async function refresh() {
     else if (!firstLoad && S.panel?.kind === "region" && S.selected) {
       const d = await getJSON(`/api/regions/${S.selected}`).catch(() => null);
       if (d && S.panel?.kind === "region") {
-        // keep the statistics in place unless their data changed
-        const same = JSON.stringify(d) === JSON.stringify(S.panel.data);
+        // keep the panel and its charts in place unless the oblast's data or live state (its own, its raions') changed
+        const same = before === panelLive(d.id, d.name) && JSON.stringify(d) === JSON.stringify(S.panel.data);
         S.panel = { kind: "region", data: d };
         if (!same) renderPanel();
       }

@@ -40,8 +40,8 @@ def create_app(settings: Settings | None = None, engine: ForecastEngine | None =
     app.state.engine = engine
 
     def _not_ready() -> dict:
-        # message: Ukrainian text (kept for API clients); code: the same, language-neutral, for the UI
-        return {"status": engine.status, "message": engine.message, "code": engine.message_code}
+        # message: Ukrainian text (kept for API clients); message_code: the same, language-neutral, for the UI
+        return {"status": engine.status, "message": engine.message, "message_code": engine.message_code}
 
     def _ready():
         if engine.alerts is None:

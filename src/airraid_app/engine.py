@@ -563,8 +563,9 @@ class ForecastEngine:
 
     # ------------------------------------------------------------ lifecycle
     def _set(self, status: str, message: str, code: dict | None = None) -> None:
-        self.status, self.message = status, message
+        # the code first: a reader that sees the new status also sees its code (the UI shows the code)
         self.message_code = code or {"code": status}
+        self.status, self.message = status, message
 
     def bootstrap(self) -> None:
         try:
