@@ -7,6 +7,7 @@
     python3 scripts/pipeline.py status --site site --store live-data   # api/status.json + _state/pipeline.json
     python3 scripts/pipeline.py retrain-check --models var/models      # dispatch train.yml when models are stale
     python3 scripts/pipeline.py keepalive                  # dead man's switch for the 10-minute schedule
+    python3 scripts/pipeline.py wait-origin --store live-data   # until the forecast origin minute has begun
 
 GitHub API calls use GITHUB_TOKEN (never printed). Decisions are pure functions
 (`gate_decision`, `next_slot`, `keepalive_decision`, `retrain_reason`) with
@@ -313,6 +314,37 @@ def cmd_retrain_check(a) -> None:
     notice(f"dispatched {a.workflow} on {ref}: {why}")
 
 
+# ------------------------------------------------------------------- origin
+def origin_wait(last_poll: datetime, now: datetime, margin_s: float = 2.0) -> float:
+    """Seconds until the forecast origin (the first whole minute at or after the poll) has
+    passed. Text features at the origin need the archive to be complete up to it, so the
+    archive is fetched only then: never later information, never a gap."""
+    origin = last_poll if last_poll.second == 0 and last_poll.microsecond == 0 else \
+        last_poll.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    return max(0.0, (origin - now).total_seconds() + margin_s)
+
+
+def cmd_wait_origin(a) -> None:
+    sys.path.insert(0, str(ROOT / "src"))
+    import pandas as pd  # noqa: E402  (only this command needs the store)
+
+    from airraid import store
+
+    now = utcnow()
+    try:
+        polls = store.load(a.store, "polls", since=pd.Timestamp(now) - pd.Timedelta(hours=1))
+    except Exception as e:  # never block the archive update: the forecast checks coverage itself
+        print(f"could not read the polls ({e!r}): not waiting")
+        return
+    if polls.empty:
+        print("no poll in the last hour: nothing to wait for")
+        return
+    last = polls["observed_at"].max().to_pydatetime()
+    wait = origin_wait(last, now)
+    print(f"last poll {last:%H:%M:%S}Z: waiting {wait:.0f} s for the origin minute before fetching the text archive")
+    time.sleep(min(wait, 62.0))
+
+
 # ------------------------------------------------------------------ keep-alive
 def next_slot(now: datetime, slot: int = SLOT_MIN, offset: int = SLOT_OFFSET) -> datetime:
     """The next cron slot strictly after `now` (minutes offset, offset+slot, ...)."""
@@ -408,6 +440,8 @@ def main(argv: list[str] | None = None) -> None:
     r.add_argument("--after-hours", type=float, default=6)
     r.add_argument("--cooldown", type=float, default=60, help="minutes between train dispatches")
     r.add_argument("--workflow", default="train.yml")
+    w = sub.add_parser("wait-origin")
+    w.add_argument("--store", default="live-data")
     k = sub.add_parser("keepalive")
     k.add_argument("--grace", type=float, default=3, help="minutes after the slot to wait for cron")
     a = ap.parse_args(argv)
@@ -415,7 +449,7 @@ def main(argv: list[str] | None = None) -> None:
         print(models_key())
     else:
         {"models-info": cmd_models_info, "gate": cmd_gate, "timed": cmd_timed, "status": cmd_status, "retrain-check": cmd_retrain_check,
-         "keepalive": cmd_keepalive}[a.cmd](a)
+         "keepalive": cmd_keepalive, "wait-origin": cmd_wait_origin}[a.cmd](a)
 
 
 if __name__ == "__main__":

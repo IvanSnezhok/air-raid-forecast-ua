@@ -100,3 +100,12 @@ def test_timed_propagates_exit_code(tmp_path):
     assert ok.returncode == 0 and bad.returncode == 1
     steps = json.loads((tmp_path / "pipeline-timings.json").read_text())["steps"]
     assert [(s["name"], s["ok"]) for s in steps] == [("a", True), ("b", False)]
+
+
+def test_text_archive_is_fetched_only_after_the_origin_minute():
+    poll = datetime(2026, 10, 12, 1, 45, 22, tzinfo=timezone.utc)
+    # origin 01:46:00: from 01:45:23 wait until 01:46:02
+    assert P.origin_wait(poll, poll + timedelta(seconds=1)) == 39.0
+    assert P.origin_wait(poll, datetime(2026, 10, 12, 1, 46, 30, tzinfo=timezone.utc)) == 0.0
+    on_minute = poll.replace(second=0)
+    assert P.origin_wait(on_minute, on_minute) == 2.0  # a poll exactly on the minute is its own origin

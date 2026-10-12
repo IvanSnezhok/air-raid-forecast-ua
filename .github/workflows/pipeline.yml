@@ -135,7 +135,10 @@ jobs:
       - name: Update the text archive (Telegram channels, news)
         id: text
         continue-on-error: true  # without it the forecast serves the history-only model and says so
+        # the origin is the first whole minute after the poll; the archive must be complete up to
+        # it, so it is fetched only once that minute has begun (on average a 30 s wait)
         run: |
+          python3 scripts/pipeline.py timed wait_origin -- python3 scripts/pipeline.py wait-origin --store "$STORE"
           python3 scripts/pipeline.py timed text_collect -- bash .github/scripts/text-data.sh update
           echo "AIRRAID_TEXT_ROOT=text-data" >> "$GITHUB_ENV"  # the static build serves the same text model
       - name: Forecast (served models; no training unless none are compatible)
