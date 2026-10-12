@@ -39,8 +39,9 @@ import time
 import numpy as np
 import pandas as pd
 
-from airraid import explain, nowcast, training
+from airraid import explain, nowcast, recalibration, training
 from airraid import store as pit
+from airraid import verification_history
 from airraid.data import build_grid, download, load_alerts
 from airraid.evaluate import reliability, scores
 from airraid.features import HORIZONS, KYIV, hourly_fraction, hourly_starts
@@ -347,6 +348,8 @@ class ForecastEngine:
                     raise NotReady(self.message)
             text_rows, text_status = (None, "off") if self.text is None else self.text.rows_now(grid, grid.n_minutes // 60)
             probs = nowcast.predict(self.models, grid, self.text, text_rows, explain=parts).assign(text_status=text_status)
+            # the recalibration map predict_now.py would have applied at this origin
+            probs = recalibration.apply(probs, recalibration.latest(self.s.store_dir, origin))
             log.warning("no stored forecast for origin %s: computed it with the loaded models", origin)
         gap_h = (origin - snap["known"]) / pd.Timedelta(hours=1)
         result = self._compute(grid, origin, hist_end, probs, snap["live"], gap_h, meta, snap["hist"],
@@ -492,6 +495,40 @@ class ForecastEngine:
             raise NotReady("no data")
         J, known = self._store_verified() if self.s.store_dir is not None else self._verified_journal(alerts, hist_end)
         return site_summary(J, known, region=region, recent=recent_hours)
+
+    def history(self) -> dict:
+        """/api/history: the verification record aggregated for the History tab, and the state
+        of the recalibration layer (airraid.verification_history, airraid.recalibration)."""
+        J, known, cal = self._history_input()
+        key = ("summary", len(J), None if J.empty else str(J["origin"].max()), str(known), str(cal.get("fitted_at")))
+        with self.lock:
+            if getattr(self, "_hist_cache", {}).get("summary", (None,))[0] == key:
+                return self._hist_cache["summary"][1]
+        out = verification_history.summary(J, known, cal)
+        with self.lock:
+            self._hist_cache = {**getattr(self, "_hist_cache", {}), "summary": (key, out)}
+        return out
+
+    def history_timeline(self) -> dict:
+        """/api/history/timeline: per oblast, the forecast issued each hour and what happened (7 days)."""
+        J, known, _ = self._history_input(persist=False)
+        return verification_history.timeline(J, known)
+
+    def _history_input(self, persist: bool = True) -> tuple[pd.DataFrame, pd.Timestamp | None, dict]:
+        with self.lock:
+            alerts, hist_end = self.alerts, self.hist_end
+        if alerts is None:
+            raise NotReady("no data")
+        if self.s.store_dir is not None:
+            J, known = self._store_verified()
+            grid = self._store_snapshot()["grid"] if persist and len(J) else None
+            cal = recalibration.describe(recalibration.latest(self.s.store_dir, pd.Timestamp.now(tz="UTC")))
+        else:
+            J, known = self._verified_journal(alerts, hist_end)
+            grid, cal = None, recalibration.describe(None)
+        if persist and len(J):
+            J = J.assign(persist=verification_history.persistence(J, grid))
+        return J, known, cal
 
     def _store_verified(self) -> tuple[pd.DataFrame, pd.Timestamp]:
         root, now = self.s.store_dir, pd.Timestamp.now(tz="UTC")

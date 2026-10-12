@@ -15,7 +15,9 @@ Labels come from
     the volunteer labels; they are reported separately and are replaced by
     dataset labels once the dataset covers the window.
 Forecast probabilities are never recomputed: they are the ones logged when the
-forecast was issued.
+forecast was issued. Both are scored: `p` (served) and `p_raw` (the model before the
+recalibration layer, airraid.recalibration; rows logged before it existed served the
+raw probability, so their p_raw is p).
 """
 from __future__ import annotations
 
@@ -65,7 +67,8 @@ def label_grid(alerts: pd.DataFrame, store_root: Path | None, now: pd.Timestamp)
         end = max(hi for _, hi in spans).floor("min")
         if end > dataset_end:
             gap = gap_alerts(rec, end, alerts)
-            return build_grid(pd.concat([alerts, gap], ignore_index=True), data_end=end), dataset_end, spans
+            hist = pd.concat([alerts, gap], ignore_index=True) if len(gap) else alerts  # none: keep the dtypes
+            return build_grid(hist, data_end=end), dataset_end, spans
     return build_grid(alerts, data_end=dataset_end), dataset_end, spans
 
 
@@ -103,6 +106,13 @@ def _brier(y, p):
     return float(np.mean((p - y) ** 2)) if len(y) else None
 
 
+def raw_p(df: pd.DataFrame) -> pd.Series:
+    """The model's own probability: `p_raw` where logged, else `p` (logged before the
+    recalibration layer existed, when the raw probability was served)."""
+    p = pd.to_numeric(df["p"], errors="coerce")
+    return pd.to_numeric(df["p_raw"], errors="coerce").fillna(p) if "p_raw" in df else p
+
+
 def summarise(v: pd.DataFrame, now: pd.Timestamp) -> dict:
     """Brier of the model vs the 28-day climatology, hit rate, per target / horizon / window."""
     out = {"verified_until_utc": str(now), "n_verified": int(len(v)), "groups": []}
@@ -117,12 +127,13 @@ def summarise(v: pd.DataFrame, now: pd.Timestamp) -> dict:
                 continue
             y, p, c = w["y"].to_numpy(), w["p"].to_numpy(), w["clim"].to_numpy()
             bm, bc = _brier(y, p), _brier(y, c)
+            br = _brier(y, raw_p(w).to_numpy())
             hit = (p >= 0.5) == (y == 1)
             hi, lo_p = p >= 0.5, p < 0.2
             out["groups"].append({
                 "target": t, "horizon_h": int(h), "window": label, "n": int(len(w)),
                 "n_origins": int(o[w.index].nunique()),
-                "base_rate": float(y.mean()), "brier_model": bm, "brier_clim": bc,
+                "base_rate": float(y.mean()), "brier_model": bm, "brier_raw": br, "brier_clim": bc,
                 "skill_vs_clim": None if not bc else 1 - bm / bc,
                 "hit_rate_at_0.5": float(hit.mean()),
                 "recall_at_0.5": float(((p >= 0.5) & (y == 1)).sum() / max(1, (y == 1).sum())),
@@ -145,6 +156,8 @@ def verify(log: pd.DataFrame, alerts: pd.DataFrame, store_root: Path | None = No
     v = log.dropna(subset=["y"]).reset_index(drop=True)
     v["hit_at_0.5"] = ((v["p"] >= 0.5) == (v["y"] == 1)).astype(int)
     v["brier_model"] = (v["p"] - v["y"]) ** 2
+    v["p_raw"] = raw_p(v)
+    v["brier_raw"] = (v["p_raw"] - v["y"]) ** 2
     v["brier_clim"] = (v["clim"] - v["y"]) ** 2
     record_end = grid.t0 + pd.Timedelta(minutes=grid.n_minutes)
     summary = summarise(v, record_end)
@@ -166,10 +179,11 @@ def _score_rows(J: pd.DataFrame) -> list[dict]:
     for (t, h), q in J.groupby(["target", "horizon"]):
         y, p, c = q["y"].to_numpy(float), q["p"].to_numpy(float), q["clim"].to_numpy(float)
         bm, bc = float(np.mean((p - y) ** 2)), float(np.mean((c - y) ** 2))
+        br = float(np.mean((raw_p(q).to_numpy(float) - y) ** 2))
         hi, lo = p >= 0.5, p < 0.2
         out.append({
             "target": t, "horizon": int(h), "n": int(len(q)), "n_origins": int(q["origin"].nunique()),
-            "base_rate": _f(y.mean()), "brier": _f(bm), "brier_clim": _f(bc),
+            "base_rate": _f(y.mean()), "brier": _f(bm), "brier_raw": _f(br), "brier_clim": _f(bc),
             "bss_vs_clim": _f(1 - bm / bc) if bc > 0 else None,
             "hit_rate": _f(((p >= 0.5) == (y == 1)).mean()),
             "n_high": int(hi.sum()), "hit_rate_high": _f(y[hi].mean()) if hi.any() else None,

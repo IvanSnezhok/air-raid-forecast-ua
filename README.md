@@ -46,6 +46,12 @@ drivers. The "How it works" page is a short diagram plus a table of where the Te
 serves and what it gained (from `reports/text_selection.json` and `text_ablation_diff.csv`, via
 `/api/method`). Screenshots: [`docs/web-app.md`](docs/web-app.md#чому-такий-прогноз).
 
+**History tab** (`#history`): every issued forecast checked against what happened (headline
+scores vs climatology and persistence over 24 h / 7 days, skill over time, reliability, an
+hour-by-hour forecast-vs-outcome chart per oblast, the latest checked forecasts) and the state
+of the layer that learns from these checks ("Learning from verified forecasts" below).
+![History tab](docs/img/app-history.png)
+
 ## Quick start
 
 ```bash
@@ -423,9 +429,10 @@ live-data/<kind>/<YYYY-MM-DD>/<stamp>-<hash>.parquet   one immutable file per ap
   alerts_active   every record of every poll, all levels and alert types, observed_at
   alerts_history  month_ago records, fetched_at; deduplicated on append
   history_pulls   fetched_at, uid, status                    one row per history request
-  forecasts       origin, issued_at, region, target, horizon, p, clim, active_now,
-                  trained_until, hist_end, git_sha, live
-  verification    scored forecasts, verified_at, label_source
+  forecasts       origin, issued_at, region, target, horizon, p (served), p_raw (model),
+                  calibration ("platt" | "none"), clim, active_now, trained_until, hist_end, git_sha, live
+  verification    scored forecasts, verified_at, label_source, brier_model, brier_raw
+  calibration     recalibration map per target x horizon (a, b, active, reason, check-day Brier), fitted_at
   explanations    why each forecast (src/airraid/explain.py), issued_at as in forecasts: served
                   model, p, history-only p_hist, reason, base + grouped log-odds drivers, signal counts
 live-data/_state/history.json   collector bookkeeping (resume, If-Modified-Since)
@@ -449,6 +456,10 @@ became known). Files are never rewritten, so git grows only by new rows.
   T) and a fresh poll's records that started before T (their disappearance after T is not
   used). They are added only after the dataset ends and never overlap a dataset record
   (`live_alerts.after_dataset`), so live data cannot rewrite history.
+* **Learning from verified forecasts is point-in-time.** The recalibration map a forecast
+  at origin T uses was fitted from rows verified (outcome window closed, label known)
+  before T, and read from the store `as_of=T`; a store cut at T gives the same map
+  (`tests/test_recalibration.py`).
 * **Not leak-free, by design:** verification labels. `verify.py` looks up outcomes after the
   fact (that is its job); the probability it scores is the one logged at issue time.
 * **Approximate:** store-based labels (`label_source = "store"`) and gap features come from
@@ -680,9 +691,23 @@ labelled `models_source: "none"` in `/api/raions`).
   the model vs climatology over the last 24 h / 7 d / all time, hit rate, recall and
   false alarm ratio at p ≥ 0.5. With `--store` it reads the forecasts from the store,
   labels windows after the dataset end from the store's alerts.in.ua records (so within
-  hours instead of a day later), and appends the result to the store. **Verification is
-  monitoring:** it does not feed back into model weights. `tests/test_verify.py` checks
-  that it uses exactly the training labels.
+  hours instead of a day later), and appends the result to the store. It scores both the
+  served probability and the raw model one. `tests/test_verify.py` checks that it uses
+  exactly the training labels.
+* **Learning from verified forecasts** (`src/airraid/recalibration.py`): after scoring,
+  `verify.py` fits, per target × horizon, a two-parameter logistic (Platt) map
+  `p = sigmoid(a + b·logit(p_raw))` on the forecasts verified over the last 7 days, shrunk
+  towards the identity (ridge of 20·h pseudo region-hours). Ten-minute runs overlap, so rows
+  are weighted to one per region and clock hour. The map is served only if it has at
+  least 24 verified origin-hours to fit (one full day-night cycle) and 12 in a later,
+  held-out check day, each with ≥ 25 region-hours with and without an alert, and it
+  lowered the Brier score of the raw model on that check day by ≥ 1%; then it is refitted
+  on all rows. It goes to the store's `calibration`, and the next `predict_now.py` run
+  applies the newest map known at its origin (at most 6 h old) to the oblast forecasts:
+  `p` is served, `p_raw` kept, `calibration` says which. Raion forecasts derived from the
+  oblast probability (`oblast`, `oblast_x_share`) inherit the served value; raion models
+  stay raw (not verified per raion). The LightGBM weights are not changed: the models are
+  refit daily on the dataset. The History tab shows the state and "raw vs corrected".
 * `predict_now.py --as-of 2026-10-10T12:20` replays the live path at a past minute: data
   after it is dropped, store rows are used as they were known then, and models are
   retrained on the truncated dataset.
@@ -721,6 +746,7 @@ Everything runs on GitHub Actions; nothing needs a laptop or a server.
                                       or history + Telegram); trains once only if no oblast models
    7 threat type (after 6)          P(onset) × P(type | onset), same origin, posts from text-data
    8 verify (verify.py)             → store: verification     (24 h / 7 d Brier vs climatology, hit rate)
+                                      and calibration (map learned from verified forecasts, used by 6 next run)
    9 build the static site          same models, forecast and verification; raion layer with the
                                       saved raion models (store mode, AIRRAID_*_TRAIN=0: no training)
   10 status.json                    → site api/status.json + store _state/pipeline.json
@@ -734,7 +760,7 @@ Everything runs on GitHub Actions; nothing needs a laptop or a server.
 
 | what | where it lives | written by |
 |---|---|---|
-| polls, active alerts, history pulls, forecasts, verification, run status | branch `live-data` (append-only parquet, `src/airraid/store.py`) | pipeline, collect-history |
+| polls, active alerts, history pulls, forecasts, verification, calibration, run status | branch `live-data` (append-only parquet, `src/airraid/store.py`) | pipeline, collect-history |
 | Telegram posts and news, as first seen | branch `text-data` (`src/airraid/text/archive.py`) | pipeline (text-collect.yml by hand) |
 | served model bundle: oblast models (`airraid.training`), `raions/`, `text/` | Actions cache `models-v2-<code hash>-<data end>-<trained at>` | train.yml (pipeline only as a fallback, oblast models only) |
 | official raion-level file (stopped updating 2026-09-07) | Actions cache `official-data-en-v1` | pipeline / train job, downloaded once |

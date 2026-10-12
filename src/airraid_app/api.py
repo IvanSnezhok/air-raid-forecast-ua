@@ -176,6 +176,24 @@ def create_app(settings: Settings | None = None, engine: ForecastEngine | None =
         _ready()
         return await run_in_threadpool(engine.verification)
 
+    @app.get("/api/history", tags=["evaluation"],
+             summary="Історія перевірки прогнозів: оцінки за 24 год / 7 днів, у часі, калібрування, навчання на історії")
+    async def history():
+        _ready()
+        try:
+            return await run_in_threadpool(engine.history)
+        except NotReady:
+            raise HTTPException(503, detail=_not_ready())
+
+    @app.get("/api/history/timeline", tags=["evaluation"],
+             summary="Для кожної області: прогноз, виданий щогодини, і чи була тривога (7 днів)")
+    async def history_timeline():
+        _ready()
+        try:
+            return await run_in_threadpool(engine.history_timeline)
+        except NotReady:
+            raise HTTPException(503, detail=_not_ready())
+
     @app.get("/api/status", tags=["service"], summary="Коли оновлено дані і прогноз")
     async def status():
         """When the data and the forecast were last updated (the UI warns when this is over 30 min old).

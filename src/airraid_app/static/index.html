@@ -32,6 +32,7 @@
   <div class="topnav">
     <nav class="tabs" aria-label="Sections" data-i18n-attr="aria-label:nav.label">
       <a href="#map" data-view="map" data-i18n="nav.map">Map</a>
+      <a href="#history" data-view="history" data-i18n="nav.history">History</a>
       <a href="#metrics" data-view="metrics" data-i18n="nav.metrics">Model quality</a>
       <a href="#about" data-view="about" data-i18n="nav.about">How it works</a>
     </nav>
@@ -113,6 +114,10 @@
     </div>
   </section>
 
+  <section id="view-history" class="view" hidden>
+    <div id="history"></div>
+  </section>
+
   <section id="view-metrics" class="view" hidden>
     <div id="metrics"></div>
   </section>
@@ -178,7 +183,7 @@
       <p>Before every training the last week is held out and forecast hour by hour, as if live, next to two baselines:
         <b>climatology</b> (share of the last 28 days with an alert at this hour) and <b>persistence</b> ("what is now will be").
         Metrics: Brier score (lower is better), Brier skill score against climatology (above zero beats it) and ROC AUC.
-        Every live forecast is also stored and checked against what happened once its hour has passed. Results: "Model quality".</p>
+        Every live forecast is also stored and checked against what happened once its hour has passed. Results: <a href="#history">History</a>.</p>
     </details>
     <details class="more"><summary>Raions</summary>
       <p>Pick an oblast to see its raions: red where the whole raion is under alert, striped where only some hromadas are.
@@ -270,7 +275,7 @@
       <p>Перед кожним навчанням останній тиждень відкладається і прогнозується погодинно, як наживо, поруч із двома орієнтирами:
         <b>кліматологія</b> (частка з останніх 28 днів з тривогою в цю годину) і <b>персистентність</b> («що зараз, те й буде»).
         Метрики: Brier score (менше краще), Brier skill score відносно кліматології (більше нуля краще) і ROC AUC.
-        Кожен живий прогноз також зберігається і звіряється з тим, що сталося, коли його година минає. Результати: «Якість моделі».</p>
+        Кожен живий прогноз також зберігається і звіряється з тим, що сталося, коли його година минає. Результати: <a href="#history">«Історія»</a>.</p>
     </details>
     <details class="more"><summary>Райони</summary>
       <p>Оберіть область, щоб побачити її райони: червоним, де тривога на весь район, смугами, де лише в частині громад.

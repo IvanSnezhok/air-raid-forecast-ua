@@ -35,6 +35,7 @@ TIME_COL = {
     "forecasts": "issued_at",  # the forecast log
     "verification": "verified_at",  # scored forecasts
     "explanations": "issued_at",  # why each forecast: Telegram effect, grouped drivers, signals (airraid.explain)
+    "calibration": "fitted_at",  # recalibration maps learned from verified forecasts (airraid.recalibration)
 }
 # Rows whose key is already stored are dropped on append (history pulls overlap by ~30 days).
 DEDUP_KEY = {
