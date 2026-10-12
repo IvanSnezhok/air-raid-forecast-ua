@@ -6,7 +6,7 @@
 
 Runs the same ForecastEngine as the FastAPI service once, saves the answers of
 /api/state, /api/forecast, /api/regions[/{id}], /api/raions[/{id}], /api/metrics,
-/api/verification and /api/threats (only if the threat-type forecast exists) as api/*.json and
+/api/verification, /api/method and /api/threats (only if the threat-type forecast exists) as api/*.json and
 copies the UI into site/. The UI detects the <meta name="airraid-static"> tag
 and reads api/<name>.json instead of calling /api/<name>. Without threat-type
 data the threat layer is hidden by the UI itself (forecast.threats is null).
@@ -40,7 +40,7 @@ _API_LINKS = (
     '<a href="api/state.json">state</a>, <a href="api/forecast.json">forecast</a>, '
     '<a href="api/regions.json">regions</a>, <a href="api/raions.json">raions</a>, '
     '<a href="api/metrics.json">metrics</a>, <a href="api/verification.json">verification</a>, '
-    '<a href="api/status.json">status</a>.'
+    '<a href="api/method.json">method</a>, <a href="api/status.json">status</a>.'
 )
 # The "API" paragraph of the How-it-works page (one per UI language) points to the JSON files instead of /docs.
 STATIC_API_NOTES = {
@@ -88,6 +88,7 @@ def build(out: Path, settings: Settings, status: Path | None = None) -> None:
         save(f"raions/{r['id']}")
     save("metrics", required=False)
     save("verification", required=False)
+    save("method", required=False)  # How-it-works: where the Telegram model serves and what it gains
     save("threats", required=False)  # 404 without a threat-type forecast
     if status is not None and status.exists():
         shutil.copy(status, api / "status.json")

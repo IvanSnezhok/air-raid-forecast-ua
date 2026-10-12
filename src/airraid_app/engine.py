@@ -39,7 +39,7 @@ import time
 import numpy as np
 import pandas as pd
 
-from airraid import nowcast, training
+from airraid import explain, nowcast, training
 from airraid import store as pit
 from airraid.data import build_grid, download, load_alerts
 from airraid.evaluate import reliability, scores
@@ -312,11 +312,13 @@ class ForecastEngine:
             hist = pd.concat([hist, after_dataset(extra, dataset)], ignore_index=True)
         grid, _ = nowcast.feature_grid(hist, origin)
         text_rows, text_status = (None, "off") if self.text is None else self.text.rows_now(grid, grid.n_minutes // 60)
-        probs = nowcast.predict(self.models, grid, self.text, text_rows).assign(text_status=text_status)
+        parts: list = []
+        probs = nowcast.predict(self.models, grid, self.text, text_rows, explain=parts).assign(text_status=text_status)
         known = self.recorder.known_until(hist_end)
         cs = self.recorder.covered_since
         gap_h = ((cs - hist_end) if cs is not None and cs > hist_end else (origin - known)) / pd.Timedelta(hours=1)
         result = self._compute(grid, origin, hist_end, probs, live, gap_h, self.meta, hist, rl)
+        self._attach_why(result, explain.frame(parts, origin))
         with self.lock:
             self._forecast = (key, result)
         J = self.journal.frame()
@@ -334,6 +336,7 @@ class ForecastEngine:
                 return self._forecast[1]
         F = pit.load(self.s.store_dir, "forecasts", since=origin.floor("D"))
         F = F[pd.to_datetime(F["origin"], utc=True) == origin] if len(F) else F
+        parts: list = []
         if len(F):
             probs = F.sort_values("issued_at").drop_duplicates(["region", "target", "horizon"], keep="last")
             meta = {**meta, "data_end": str(pd.Timestamp(probs["trained_until"].iloc[0]).isoformat())} \
@@ -343,15 +346,41 @@ class ForecastEngine:
                 if not self.models:
                     raise NotReady(self.message)
             text_rows, text_status = (None, "off") if self.text is None else self.text.rows_now(grid, grid.n_minutes // 60)
-            probs = nowcast.predict(self.models, grid, self.text, text_rows).assign(text_status=text_status)
+            probs = nowcast.predict(self.models, grid, self.text, text_rows, explain=parts).assign(text_status=text_status)
             log.warning("no stored forecast for origin %s: computed it with the loaded models", origin)
         gap_h = (origin - snap["known"]) / pd.Timedelta(hours=1)
         result = self._compute(grid, origin, hist_end, probs, snap["live"], gap_h, meta, snap["hist"],
                                snap["raion_live"])
+        self._attach_why(result, self._stored_why(origin, probs) if len(F) else explain.frame(parts, origin))
         result["issued_at"] = _iso(pd.to_datetime(probs["issued_at"], utc=True).max()) if "issued_at" in probs else None
         with self.lock:
             self._forecast = (snap["key"], result)
         return result
+
+    def _stored_why(self, origin: pd.Timestamp, probs: pd.DataFrame) -> pd.DataFrame:
+        """Store mode: the explanation predict_now.py logged with the served forecast (same issued_at)."""
+        try:
+            E = pit.load(self.s.store_dir, "explanations", since=origin.floor("D"))
+        except Exception:  # noqa: BLE001 - optional layer
+            log.exception("could not read the stored explanations")
+            return pd.DataFrame()
+        if not len(E):
+            return E
+        E = E[pd.to_datetime(E["origin"], utc=True) == origin]
+        if "issued_at" in probs and len(E):
+            E = E[pd.to_datetime(E["issued_at"], utc=True).isin(pd.to_datetime(probs["issued_at"], utc=True))]
+        return E.sort_values("issued_at").drop_duplicates(["region", "target", "horizon"], keep="last")
+
+    @staticmethod
+    def _attach_why(result: dict, E: pd.DataFrame | None) -> None:
+        """Add each region's "why" (airraid.explain.payload; None when not available) to the forecast."""
+        by = {r: g for r, g in E.groupby("region")} if E is not None and len(E) else {}
+        for r in result["regions"]:
+            try:
+                r["why"] = explain.payload(by.get(r["name"]))
+            except Exception:  # noqa: BLE001 - never break the forecast over its explanation
+                log.exception("explanation of %s failed", r["name"])
+                r["why"] = None
 
     def _history(self, alerts: pd.DataFrame) -> pd.DataFrame:
         """Dataset history plus alerts recorded from live polls after it (never before its end)."""

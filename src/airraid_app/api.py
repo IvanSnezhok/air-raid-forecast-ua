@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
-from . import __version__
+from . import __version__, method
 from .config import Settings
 from .engine import ForecastEngine, NotReady
 from .regions import slug, uk_name
@@ -154,8 +154,22 @@ def create_app(settings: Settings | None = None, engine: ForecastEngine | None =
             "history_until": r["history_until"], "methods": r["methods"], "tier": r["tier"], "models": r["models"],
             "oblast_probs": oblast["probs"] if oblast else None,
             "oblast_active_at_origin": oblast["active_at_origin"] if oblast else None,
+            "oblast_why": oblast.get("why") if oblast else None,
             "evaluation": engine.raions.evaluation_for(match["oblast"]),
         }
+
+    @app.get("/api/method", tags=["evaluation"], summary="Як рахується прогноз: де працює модель з Telegram і що вона дає")
+    async def method_info():
+        """Where the history + Telegram model serves (per target and horizon), its measured Brier change
+        against the history-only model (validation month and test weeks), the text sources, and the
+        groups of the "why" block of /api/regions/{id}."""
+        _ready()
+        status = None
+        try:
+            status = (await _forecast())["model"].get("text_status")
+        except HTTPException:
+            pass
+        return await run_in_threadpool(method.summary, settings.reports_dir, engine.text, status)
 
     @app.get("/api/verification", tags=["evaluation"], summary="Перевірка виданих прогнозів: що справдилось")
     async def verification():

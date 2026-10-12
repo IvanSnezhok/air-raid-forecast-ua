@@ -155,3 +155,20 @@ def test_pipeline_site_with_text_and_raion_layers(settings, tmp_path, fake_now, 
     odesa = [r for r in rz["raions"] if r["oblast"] == "Odeska oblast"]
     assert odesa and all(r["live"]["active"] for r in odesa)  # the oblast-level alert of the same poll
     assert (out / "api" / "raions" / f"{odesa[0]['id']}.json").exists()
+
+    # why this forecast: logged with the forecast (same issued_at), served as logged
+    E = store.load(root, "explanations")
+    assert len(E) == len(log) and set(E["issued_at"]) == set(log["issued_at"])
+    reg = json.loads((out / "api" / "regions" / "odeska.json").read_text())
+    for t, by_h in reg["probs"].items():
+        for h, p in by_h.items():
+            it = reg["why"]["items"][t][str(h)]
+            assert it["p"] == pytest.approx(p, abs=6e-5) and it["model"] in {"lightgbm", "lightgbm_text"}
+            if it["model"] == "lightgbm_text":  # the Telegram effect: both models' numbers, Telegram drivers
+                assert it["text"] == "served" and it["p_hist"] is not None and "tg_region" in it["groups"]
+            else:
+                assert it["text"] != "served" and it["p_hist"] == pytest.approx(it["p"])
+    assert reg["why"]["has_text"] and isinstance(reg["why"]["signals"], list)
+    rj = json.loads((out / "api" / "raions" / f"{odesa[0]['id']}.json").read_text())
+    assert rj["oblast_why"] == reg["why"]
+    assert json.loads((out / "api" / "method.json").read_text())["text_status"] == "ok"
