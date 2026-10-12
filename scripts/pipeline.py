@@ -340,8 +340,11 @@ def cmd_retrain_check(a) -> None:
 
 
 # ------------------------------------------------------------- daily jobs
+LAG_LIMIT_H = 6  # the alert record may lag the forecast origin by this much before the history is re-pulled
+
+
 def dispatch_reason(lag_h: float | None, recent: list[dict], now: datetime, daily_h: float = 22,
-                    lag_limit_h: float = 6, cooldown_h: float = 3) -> str | None:
+                    lag_limit_h: float = LAG_LIMIT_H, cooldown_h: float = 1) -> str | None:
     """Why a daily job (collect.yml's history pull, threat-labels.yml) should be dispatched now, or None.
 
     GitHub's schedule does not fire reliably in this repository (the daily crons of collect.yml
@@ -372,8 +375,11 @@ def cmd_history_check(a) -> None:
     if why is None:
         print("history pull not due" + ("" if lag_h is None else f" (record complete up to {lag_h:.1f} h before the origin)"))
         return
-    dispatch(a.workflow, ref)
-    notice(f"dispatched {a.workflow} on {ref}: {why}")
+    # the collector skips oblasts pulled in the last 20 h; coverage is re-anchored only when every
+    # oblast is pulled again, so a lagging record asks for all of them
+    lagging = lag_h is not None and lag_h > LAG_LIMIT_H
+    dispatch(a.workflow, ref, {"min_age_h": "1"} if lagging else None)
+    notice(f"dispatched {a.workflow} on {ref}: {why}" + (" (re-pull every oblast)" if lagging else ""))
 
 
 def cmd_daily_check(a) -> None:
