@@ -6,11 +6,12 @@
     python3 scripts/pipeline.py timed NAME -- CMD ...      # run CMD, record its wall time as step NAME
     python3 scripts/pipeline.py status --site site --store live-data   # api/status.json + _state/pipeline.json
     python3 scripts/pipeline.py retrain-check --models var/models      # dispatch train.yml when models are stale
+    python3 scripts/pipeline.py history-check                          # dispatch collect.yml when the history pull is due
     python3 scripts/pipeline.py keepalive                  # dead man's switch for the 10-minute schedule
     python3 scripts/pipeline.py wait-origin --store live-data   # until the forecast origin minute has begun
 
 GitHub API calls use GITHUB_TOKEN (never printed). Decisions are pure functions
-(`gate_decision`, `next_slot`, `keepalive_decision`, `retrain_reason`) with
+(`gate_decision`, `next_slot`, `keepalive_decision`, `retrain_reason`, `history_pull_reason`) with
 tests in tests/test_pipeline_glue.py.
 
 Why a keep-alive: GitHub's `schedule` is best effort. In this repository the
@@ -337,6 +338,42 @@ def cmd_retrain_check(a) -> None:
     notice(f"dispatched {a.workflow} on {ref}: {why}")
 
 
+# -------------------------------------------------------------- history pull
+def history_pull_reason(lag_h: float | None, recent: list[dict], now: datetime, daily_h: float = 22,
+                        lag_limit_h: float = 6, cooldown_h: float = 3) -> str | None:
+    """Why the alerts.in.ua history pull (collect.yml) should be dispatched now, or None.
+
+    GitHub's schedule does not fire reliably in this repository (the daily cron of collect.yml
+    never ran), so the pipeline dispatches the pull itself: once a day, and sooner when the alert
+    record the forecast used is complete only up to more than `lag_limit_h` hours before its
+    origin (a poll gap over POLL_GAP stops the polls' coverage until the next pull re-anchors it),
+    then at most every `cooldown_h` hours. Never while a pull is queued or running.
+    """
+    if any(r["status"] != "completed" for r in recent):
+        return None
+    last = max((parse_ts(r["created_at"]) for r in recent), default=None)
+    age_h = None if last is None else (now - last).total_seconds() / 3600
+    if age_h is None or age_h >= daily_h:
+        return "daily history pull" + ("" if age_h is None else f" (the last one {age_h:.0f} h ago)")
+    if lag_h is not None and lag_h > lag_limit_h and age_h >= cooldown_h:
+        return f"the alert record is complete only up to {lag_h:.0f} h before the forecast"
+    return None
+
+
+def cmd_history_check(a) -> None:
+    fc = _read_json(ROOT / "reports" / "forecast_meta.json")
+    at = lambda k: parse_ts(fc[k].replace(" ", "T") + "Z") if fc.get(k) else None  # noqa: E731
+    origin, complete = at("origin_utc"), at("record_complete_until_utc")
+    lag_h = (origin - complete).total_seconds() / 3600 if origin and complete else None
+    ref = os.environ["GITHUB_REF_NAME"]
+    why = history_pull_reason(lag_h, runs(a.workflow, ref, per_page=5), utcnow())
+    if why is None:
+        print("history pull not due" + ("" if lag_h is None else f" (record complete up to {lag_h:.1f} h before the origin)"))
+        return
+    dispatch(a.workflow, ref)
+    notice(f"dispatched {a.workflow} on {ref}: {why}")
+
+
 # ------------------------------------------------------------------- origin
 def origin_wait(last_poll: datetime, now: datetime, margin_s: float = 2.0) -> float:
     """Seconds until the forecast origin (the first whole minute at or after the poll) has
@@ -463,6 +500,8 @@ def main(argv: list[str] | None = None) -> None:
     r.add_argument("--after-hours", type=float, default=6)
     r.add_argument("--cooldown", type=float, default=60, help="minutes between train dispatches")
     r.add_argument("--workflow", default="train.yml")
+    hc = sub.add_parser("history-check")
+    hc.add_argument("--workflow", default="collect.yml")
     w = sub.add_parser("wait-origin")
     w.add_argument("--store", default="live-data")
     k = sub.add_parser("keepalive")
@@ -472,7 +511,7 @@ def main(argv: list[str] | None = None) -> None:
         print(models_key())
     else:
         {"models-info": cmd_models_info, "gate": cmd_gate, "timed": cmd_timed, "status": cmd_status, "retrain-check": cmd_retrain_check,
-         "keepalive": cmd_keepalive, "wait-origin": cmd_wait_origin}[a.cmd](a)
+         "history-check": cmd_history_check, "keepalive": cmd_keepalive, "wait-origin": cmd_wait_origin}[a.cmd](a)
 
 
 if __name__ == "__main__":

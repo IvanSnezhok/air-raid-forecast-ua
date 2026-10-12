@@ -180,6 +180,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/pipeline.py retrain-check --models "$AIRRAID_MODEL_DIR"
+      - name: Pull the alerts.in.ua history when it is due
+        # GitHub's schedule does not fire reliably here (collect.yml's daily cron never ran):
+        # dispatch the pull daily, and sooner when the alert record lags the forecast by > 6 h
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/pipeline.py history-check
 
   deploy:
     needs: run
