@@ -1,19 +1,33 @@
-"""Forecast engine behind the web app.
+"""Forecast engine behind the web app and the static site.
 
 Wraps the modelling package (`airraid`) for serving:
   * loads the alert history (volunteer dataset) and refreshes it periodically;
-  * trains one LightGBM per (target, horizon), the same way predict_now.py does,
-    and caches the boosters on disk so a restart does not retrain;
-  * scores each model on a held-out last week before the final refit, so the UI
-    can show how the model that is actually serving performed;
-  * makes the forecast for the current hour, with live alerts from alerts.in.ua
-    added on top of the history when a token is configured. Live records only
-    ever extend the history after the dataset ends (airraid.live_alerts.
-    after_dataset) and never enter training; their oblast-level state follows
-    the training data's definition (see live.py).
+  * serves the model bundle of airraid.training (one LightGBM per target and
+    horizon, holdout-scored on the last week before the final refit): the same
+    files the train job publishes and the 10-minute pipeline forecasts with.
+    It trains only when no compatible bundle exists;
+  * makes the forecast with airraid.nowcast (same origin rule and features as
+    predict_now.py): origin = the first whole minute after the newest live
+    observation, hour blocks aligned to end at it.
 
-Feature engineering and the model class are imported from `airraid` unchanged,
-so the app inherits the no-leakage guarantees tested in tests/test_leakage.py.
+Two sources of live data:
+  * server mode (default): polls alerts.in.ua itself when a token is set and
+    turns the polls into oblast-level alerts with the training data's
+    definition (journal.LiveRecorder, airraid.live_alerts);
+  * store mode (`Settings.store_dir`, AIRRAID_STORE): reads the point-in-time store
+    the pipeline writes (src/airraid/store.py): the newest poll, the gap after
+    the dataset (live_alerts.store_records), the forecasts issued by
+    predict_now.py (served as logged, so the site shows exactly the verified
+    numbers) and the verification. The static GitHub Pages build uses this.
+Live records only ever extend the history after the dataset ends and never
+enter training.
+
+Optional layers: the history + Telegram model (`Settings.text_root`,
+airraid.text.serving, boosters in <model_dir>/text) replaces the history-only
+model per target and horizon when the text archive covers the origin; the raion
+layer (raion_engine.RaionForecaster) adds raion state and forecasts. With
+AIRRAID_TEXT_TRAIN=0 / AIRRAID_RAION_TRAIN=0 (the pipeline's site build) their
+models are only loaded, never trained here.
 """
 from __future__ import annotations
 
@@ -21,47 +35,36 @@ import json
 import logging
 import threading
 import time
-from dataclasses import dataclass
-from pathlib import Path
 
-import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
+from airraid import nowcast, training
+from airraid import store as pit
 from airraid.data import build_grid, download, load_alerts
 from airraid.evaluate import reliability, scores
-from airraid.live_alerts import after_dataset
+from airraid.features import HORIZONS, KYIV, hourly_fraction, hourly_starts
+from airraid.live_alerts import LIVE_EXPIRY_HOURS, after_dataset, from_frame, store_records
 from airraid.live_alerts import parse_active as parse_records
-from airraid.features import (
-    HORIZONS, KYIV, add_horizon_features, build_features, hourly_fraction, hourly_starts, labels, origin_hours,
-)
-from airraid.models import GBM, feature_columns
+from airraid.training import TARGETS, Plan  # noqa: F401  (Plan re-exported for old imports)
+from airraid.verification import outcomes, site_summary
 
 from .config import Settings
 from .journal import ForecastJournal, LiveRecorder
-from .threats import ThreatForecast
-from .live import LiveState, fetch_active, state_from_alerts, state_from_dataset
+from .live import LiveState, RegionState, fetch_active, state_from_alerts, state_from_dataset
 from .raion_engine import RaionForecaster, raion_state
 from .regions import slug, uk_name
+from .threats import ThreatForecast
 
 log = logging.getLogger("airraid_app")
 
-TARGETS = ("active", "onset")
-# Reference forecasts used for skill scores, same as run.py.
-CLIM_COL = {"active": "hod_clim_28d", "onset": "onset_clim_28d"}
-PERS_COL = {"active": "active_now", "onset": "onset_last_h"}
-EMBARGO_H = max(HORIZONS)
-MODEL_FORMAT = 1
+MODEL_FORMAT = training.MODEL_FORMAT
+JOURNAL_EVERY = pd.Timedelta(minutes=10)  # server mode: journal at most one origin per 10 minutes
+VERIFY_DAYS = 8
 
 
 class NotReady(RuntimeError):
     pass
-
-
-@dataclass
-class Plan:
-    months: int
-    trees: int
 
 
 def _iso(ts: pd.Timestamp | None) -> str | None:
@@ -82,7 +85,7 @@ class ForecastEngine:
         self.regions: list[str] = []
         self.hist_end: pd.Timestamp | None = None
         self.data_loaded_at: float = 0.0
-        self.models: dict[tuple[str, int], GBM] = {}
+        self.models: dict = {}  # (target, horizon) -> airraid.models.GBM
         self.meta: dict = {}
         self.holdout: pd.DataFrame | None = None
         self._live: LiveState | None = None
@@ -125,98 +128,26 @@ class ForecastEngine:
 
     # ---------------------------------------------------------------- models
     def _plans(self) -> dict[tuple[str, int], Plan]:
-        """Training window and tree count per model.
-
-        Uses the selection made on the validation month by run.py when
-        reports/run_summary.json exists, else the defaults from Settings.
-        """
-        selection = {}
-        path = self.s.reports_dir / "run_summary.json"
-        if path.exists():
-            try:
-                selection = json.loads(path.read_text()).get("selection", {})
-            except (OSError, ValueError):
-                log.warning("could not read %s", path)
-        plans = {}
-        for t in TARGETS:
-            for h in HORIZONS:
-                sel = selection.get(f"{t}_h{h}")
-                if sel:
-                    months = sel.get("best_months") or self.s.max_train_months
-                    plans[(t, h)] = Plan(min(int(months), self.s.max_train_months), int(sel.get("best_trees") or self.s.n_trees))
-                else:
-                    plans[(t, h)] = Plan(self.s.train_months, self.s.n_trees)
-        return plans
+        """Training window and tree count per model (airraid.training.plans)."""
+        return training.plans(self.s.reports_dir, self.s.train_months, self.s.max_train_months, self.s.n_trees)[0]
 
     def train(self) -> None:
-        """Holdout evaluation on the last `holdout_days`, then refit on everything."""
+        """Holdout evaluation on the last `holdout_days`, then refit on everything (airraid.training)."""
         with self.lock:
-            alerts, hist_end = self.alerts, self.hist_end
+            alerts = self.alerts
         if alerts is None:
             raise NotReady("no data")
         self._set("training", "Навчання моделей")
-        t_start = time.time()
-        plans = self._plans()
-        data_end = hist_end.floor("h")
-        grid = build_grid(alerts, data_end=data_end)
-        H, S = hourly_fraction(grid), hourly_starts(grid)
-        ho_start = data_end - pd.Timedelta(days=self.s.holdout_days)
-        first = ho_start - pd.DateOffset(months=max(p.months for p in plans.values()))
-        K = origin_hours(grid, first, data_end)
-        base = build_features(grid, K, H)
-        hour = lambda ts: grid.minute(ts) // 60  # noqa: E731
-        params = {"num_threads": self.s.lgb_threads}
-
-        models, rows, preds = {}, [], []
-        n_done, n_total = 0, len(plans)
-        for h in HORIZONS:
-            df = add_horizon_features(base, grid, H, h, S)
-            origin = df["origin_hour"].to_numpy()
-            for t in TARGETS:
-                plan = plans[(t, h)]
-                y = labels(grid, K, h, H, t, S)
-                known = ~np.isnan(y)
-                # 1. holdout: train on [ho_start - months, ho_start - embargo), test on [ho_start, end)
-                lo = hour(ho_start - pd.DateOffset(months=plan.months))
-                tr = known & (origin >= lo) & (origin < hour(ho_start) - EMBARGO_H)
-                te = known & (origin >= hour(ho_start))
-                if tr.sum() and te.sum():
-                    g = GBM(n_estimators=plan.trees, params=params).fit(df[tr], y[tr])
-                    p = g.predict(df[te])
-                    yt, clim, pers = y[te], df.loc[te, CLIM_COL[t]].to_numpy(), df.loc[te, PERS_COL[t]].to_numpy()
-                    for name, q in (("lightgbm", p), ("climatology_28d", clim), ("persistence", pers)):
-                        rows.append({"target": t, "horizon": h, "model": name, **scores(yt, q, clim)})
-                    preds.append(pd.DataFrame({
-                        "origin_hour": origin[te], "region": df.loc[te, "region"].to_numpy(), "target": t,
-                        "horizon": h, "y": yt, "p": p, "clim": clim,
-                    }))
-                # 2. final model on the latest `months` of fully observed labels
-                lo = hour(data_end - pd.DateOffset(months=plan.months))
-                m = known & (origin >= lo)
-                models[(t, h)] = GBM(n_estimators=plan.trees, params=params).fit(df[m], y[m])
-                n_done += 1
-                self._set("training", f"Навчання моделей ({n_done}/{n_total})")
-            del df
-
-        holdout = pd.concat(preds, ignore_index=True) if preds else pd.DataFrame()
-        if not holdout.empty:
-            holdout["origin"] = grid.t0 + pd.to_timedelta(holdout.pop("origin_hour"), unit="h")
-        meta = {
-            "format": MODEL_FORMAT,
-            "trained_at": _iso(pd.Timestamp.now(tz="UTC")),
-            "data_end": _iso(data_end),
-            "holdout_start": _iso(ho_start),
-            "holdout_days": self.s.holdout_days,
-            "regions": grid.regions,
-            "plans": {f"{t}_h{h}": vars(p) for (t, h), p in plans.items()},
-            "selection_source": "reports/run_summary.json" if (self.s.reports_dir / "run_summary.json").exists() else "defaults",
-            "train_seconds": round(time.time() - t_start, 1),
-            "holdout_scores": rows,
-        }
-        self._save(models, meta, holdout)
+        plan, source = training.plans(self.s.reports_dir, self.s.train_months, self.s.max_train_months, self.s.n_trees)
+        models, meta, holdout = training.train(
+            alerts, plan, self.s.holdout_days, self.s.lgb_threads, selection_source=source,
+            progress=lambda n, total: self._set("training", f"Навчання моделей ({n}/{total})"))
+        training.save(self.s.model_dir, models, meta, holdout)
         if self.text is not None:
             self._set("training", "Навчання моделі з Telegram-сигналами")
-            self.text.ensure_models(grid, H, S, data_end, self.s.retrain_h)
+            data_end = pd.Timestamp(meta["data_end"])
+            grid = build_grid(alerts, data_end=data_end)
+            self.text.ensure_models(grid, hourly_fraction(grid), hourly_starts(grid), data_end, self.s.retrain_h)
         self._prepare_raions(alerts)
         with self.lock:
             self.models, self.meta, self.holdout = models, meta, holdout
@@ -224,61 +155,41 @@ class ForecastEngine:
         self._set("ready", "Готово")
         log.info("trained %d models in %.0fs", len(models), meta["train_seconds"])
 
-    def _save(self, models, meta, holdout) -> None:
-        d = self.s.model_dir
-        d.mkdir(parents=True, exist_ok=True)
-        for (t, h), g in models.items():
-            g.model.save_model(str(d / f"{t}_h{h}.txt"), num_iteration=g.n_estimators)
-        if not holdout.empty:
-            holdout.to_parquet(d / "holdout.parquet")
-        (d / "meta.json").write_text(json.dumps(meta, indent=1, default=str))
-
     def load_models(self) -> bool:
-        """Load cached boosters if they exist and are recent enough for the data."""
-        d = self.s.model_dir
-        try:
-            meta = json.loads((d / "meta.json").read_text())
-        except (OSError, ValueError):
+        """Load the saved bundle if it is compatible and (server mode) recent enough for the data.
+
+        In store mode the age is not checked: the pipeline decides when to
+        retrain, and the store's forecasts were made with exactly this bundle.
+        """
+        b = training.load(self.s.model_dir, self.regions, self._plans())
+        if b is None:
             return False
-        if meta.get("format") != MODEL_FORMAT or meta.get("regions") != self.regions:
-            return False
-        if meta.get("plans") != {f"{t}_h{h}": vars(p) for (t, h), p in self._plans().items()}:
-            return False  # training window / trees changed (e.g. run.py produced a new selection)
-        if self.hist_end is not None:
+        models, meta, holdout = b
+        if self.hist_end is not None and self.s.store_dir is None:
             age = self.hist_end - pd.Timestamp(meta["data_end"])
             if age > pd.Timedelta(hours=self.s.retrain_h):
                 return False
-        models = {}
-        for t in TARGETS:
-            for h in HORIZONS:
-                path = d / f"{t}_h{h}.txt"
-                if not path.exists():
-                    return False
-                g = GBM(n_estimators=None)
-                g.model = lgb.Booster(model_file=str(path))
-                g.regions = meta["regions"]
-                models[(t, h)] = g
         if self.text is not None:
-            age = self.s.retrain_h if self.text.allow_train else None  # saved by a separate job: any age
-            if self.text.load(pd.Timestamp(meta["data_end"]), age):
+            max_age = self.s.retrain_h if self.text.allow_train else None  # saved by a separate job: any age
+            if self.text.load(pd.Timestamp(meta["data_end"]), max_age):
                 self.text.status = "loaded"
             elif self.text.allow_train:
                 return False  # retrain, the text model with it
             else:  # AIRRAID_TEXT_TRAIN=0 and nothing saved: the history-only model serves
                 self.text.models = {}
                 self.text.status = "no saved text model and training is off (AIRRAID_TEXT_TRAIN=0)"
-        holdout = pd.read_parquet(d / "holdout.parquet") if (d / "holdout.parquet").exists() else pd.DataFrame()
         self._prepare_raions(self.alerts)
         with self.lock:
             self.models, self.meta, self.holdout = models, meta, holdout
             self._forecast = None
         self._set("ready", "Готово")
-        log.info("loaded cached models trained on data to %s", meta["data_end"])
+        log.info("loaded saved models trained on data to %s", meta["data_end"])
         return True
 
     def _prepare_raions(self, alerts: pd.DataFrame) -> None:
         # the moment forecasts will be made for: now with live data, else the end of the dataset
-        now = pd.Timestamp.now(tz="UTC") if self.s.alerts_token else self.hist_end.floor("h")
+        live = self.s.alerts_token or self.s.store_dir is not None
+        now = pd.Timestamp.now(tz="UTC") if live else self.hist_end.floor("h")
         try:
             if self.s.raion_train:
                 self.raions.prepare(alerts, now, self.s.lgb_threads)  # dataset only: training never sees live data
@@ -290,6 +201,8 @@ class ForecastEngine:
 
     # ------------------------------------------------------------------ live
     def live_state(self, max_age: float | None = None) -> LiveState:
+        if self.s.store_dir is not None:
+            return self._store_snapshot()["live"]
         max_age = self.s.live_refresh_s if max_age is None else max_age
         with self.lock:
             if self._live is not None and time.time() - self._live_at < max_age:
@@ -316,8 +229,61 @@ class ForecastEngine:
             self._raion_live = raion_live
         return state
 
+    def _store_snapshot(self) -> dict:
+        """Store mode: origin, feature grid, live state and coverage from the newest store poll. Cached."""
+        with self.lock:
+            alerts, hist_end, regions = self.alerts, self.hist_end, self.regions
+        if alerts is None:
+            raise NotReady("no data")
+        root = self.s.store_dir
+        now = pd.Timestamp.now(tz="UTC")
+        polls = pit.load(root, "polls", as_of=now, since=now - pd.Timedelta(days=1))
+        seen = polls["observed_at"].max() if len(polls) else None
+        key = (seen, hist_end)
+        with self.lock:
+            snap = getattr(self, "_snap", None)
+            if snap is not None and snap["key"] == key:
+                return snap
+        if seen is None or seen < hist_end or now - seen > pd.Timedelta(hours=LIVE_EXPIRY_HOURS):
+            live = state_from_dataset(alerts, regions, error=None if seen is None else
+                                      f"Останнє опитування alerts.in.ua було {_kyiv(seen)}: показано стан на кінець датасету.")
+            origin, records, covered = hist_end.floor("h"), None, None
+        else:
+            origin = nowcast.origin_after(seen)
+            records, covered = store_records(root, origin, hist_end)
+            live = None
+        grid, gap = nowcast.feature_grid(alerts, origin, records)
+        hist = pd.concat([alerts, gap], ignore_index=True) if len(gap) else alerts
+        raion_live = None
+        if live is None:
+            # the map's "now" is the forecast's active_now: the same grid at the origin
+            act = pit.load(root, "alerts_active", as_of=seen, since=seen.floor("D"))
+            act = act[act["observed_at"] == seen] if len(act) else act
+            polled = from_frame(act) if len(act) else []
+            states = {r: RegionState(False) for r in regions}
+            for i, r in enumerate(grid.regions):
+                if grid.n_minutes and grid.active[i, -1]:
+                    s = grid.starts[i]
+                    k = np.searchsorted(s, grid.n_minutes, "left") - 1
+                    states[r] = RegionState(True, grid.t0 + pd.Timedelta(minutes=int(s[k])) if k >= 0 else None)
+            for a in polled:
+                if a.alert_type == "air_raid" and a.oblast in states:
+                    states[a.oblast].reported = True
+                    if a.level != "oblast" and a.title:
+                        states[a.oblast].locations.append(a.title)
+            live = LiveState("alerts.in.ua", seen, states, alerts=polled)
+            rs, unmatched = raion_state(polled)  # raion state of the same poll
+            raion_live = (rs, unmatched, seen)
+        snap = {"key": key, "origin": origin, "grid": grid, "gap": gap, "live": live, "hist": hist,
+                "raion_live": raion_live, "known": max(hist_end, covered) if covered is not None else hist_end}
+        with self.lock:
+            self._snap = snap
+        return snap
+
     # -------------------------------------------------------------- forecast
     def forecast(self) -> dict:
+        if self.s.store_dir is not None:
+            return self._store_forecast()
         with self.lock:
             if not self.models:
                 raise NotReady(self.message)
@@ -325,7 +291,7 @@ class ForecastEngine:
         with self.lock:
             alerts, hist_end = self.alerts, self.hist_end
         if live.source == "alerts.in.ua":
-            origin = live.as_of.floor("h")
+            origin = nowcast.origin_after(live.as_of)
         else:
             origin = hist_end.floor("h")
         ongoing = live.ongoing_alerts()
@@ -336,11 +302,51 @@ class ForecastEngine:
         with self.lock:
             if self._forecast and self._forecast[0] == key:
                 return self._forecast[1]
-        result, journal_rows = self._compute(alerts, hist_end, origin, ongoing, live)
+        dataset, hist = alerts, self._history(alerts)
+        if not ongoing.empty:
+            extra = ongoing.assign(end=origin + pd.Timedelta(hours=1), naive=False)  # end is never used as a feature
+            hist = pd.concat([hist, after_dataset(extra, dataset)], ignore_index=True)
+        grid, _ = nowcast.feature_grid(hist, origin)
+        text_rows, text_status = (None, "off") if self.text is None else self.text.rows_now(grid, grid.n_minutes // 60)
+        probs = nowcast.predict(self.models, grid, self.text, text_rows).assign(text_status=text_status)
+        known = self.recorder.known_until(hist_end)
+        cs = self.recorder.covered_since
+        gap_h = ((cs - hist_end) if cs is not None and cs > hist_end else (origin - known)) / pd.Timedelta(hours=1)
+        result = self._compute(grid, origin, hist_end, probs, live, gap_h, self.meta, hist, rl)
         with self.lock:
             self._forecast = (key, result)
-        if not self.journal.has(origin):
-            self.journal.record(journal_rows)
+        J = self.journal.frame()
+        if not len(J) or pd.to_datetime(J["origin"], utc=True).max() <= origin - JOURNAL_EVERY:
+            self.journal.record(probs.assign(issued_at=pd.Timestamp.now(tz="UTC"), live=live.source == "alerts.in.ua"))
+        return result
+
+    def _store_forecast(self) -> dict:
+        """Store mode: the forecast the pipeline issued for the newest origin, as logged."""
+        snap = self._store_snapshot()
+        origin, grid = snap["origin"], snap["grid"]
+        with self.lock:
+            hist_end, meta = self.hist_end, self.meta
+            if self._forecast and self._forecast[0] == snap["key"]:
+                return self._forecast[1]
+        F = pit.load(self.s.store_dir, "forecasts", since=origin.floor("D"))
+        F = F[pd.to_datetime(F["origin"], utc=True) == origin] if len(F) else F
+        if len(F):
+            probs = F.sort_values("issued_at").drop_duplicates(["region", "target", "horizon"], keep="last")
+            meta = {**meta, "data_end": str(pd.Timestamp(probs["trained_until"].iloc[0]).isoformat())} \
+                if "trained_until" in probs else meta
+        else:
+            with self.lock:
+                if not self.models:
+                    raise NotReady(self.message)
+            text_rows, text_status = (None, "off") if self.text is None else self.text.rows_now(grid, grid.n_minutes // 60)
+            probs = nowcast.predict(self.models, grid, self.text, text_rows).assign(text_status=text_status)
+            log.warning("no stored forecast for origin %s: computed it with the loaded models", origin)
+        gap_h = (origin - snap["known"]) / pd.Timedelta(hours=1)
+        result = self._compute(grid, origin, hist_end, probs, snap["live"], gap_h, meta, snap["hist"],
+                               snap["raion_live"])
+        result["issued_at"] = _iso(pd.to_datetime(probs["issued_at"], utc=True).max()) if "issued_at" in probs else None
+        with self.lock:
+            self._forecast = (snap["key"], result)
         return result
 
     def _history(self, alerts: pd.DataFrame) -> pd.DataFrame:
@@ -350,44 +356,22 @@ class ForecastEngine:
             return alerts
         return pd.concat([alerts, rec[rec["region"].isin(self.regions)]], ignore_index=True)
 
-    def _compute(self, alerts, hist_end, origin, ongoing, live: LiveState) -> tuple[dict, pd.DataFrame]:
-        dataset, alerts = alerts, self._history(alerts)
-        if not ongoing.empty:
-            extra = ongoing.assign(end=origin + pd.Timedelta(hours=1), naive=False)  # end is never used as a feature
-            alerts = pd.concat([alerts, after_dataset(extra, dataset)], ignore_index=True)
-        grid = build_grid(alerts, data_end=origin)
-        H, S = hourly_fraction(grid), hourly_starts(grid)
-        k_now = grid.n_minutes // 60
-        base = build_features(grid, np.array([k_now]), H)
-        text_rows, text_status = (None, "off") if self.text is None else self.text.rows_now(grid, k_now)
-        served = set()
+    def _compute(self, grid, origin, hist_end, probs_long: pd.DataFrame, live: LiveState, gap_h: float,
+                 meta: dict, hist: pd.DataFrame, raion_live) -> dict:
+        """Response of /api/forecast from the forecast rows (`probs_long`: region, target, horizon, p,
+        and model / text_status when known), the feature grid and the history behind it."""
         probs = {r: {t: {} for t in TARGETS} for r in grid.regions}
-        journal = []
-        for h in HORIZONS:
-            x = add_horizon_features(base, grid, H, h, S)
-            for t in TARGETS:
-                model = self.models[(t, h)]
-                expected = model.model.feature_name()
-                got = feature_columns(x) + ["region"]
-                if sorted(expected) != sorted(got):
-                    raise RuntimeError("feature set changed since the models were trained; retrain needed")
-                if self.text is not None:
-                    pred, name = self.text.predict(x, t, h, text_rows, fallback=model)
-                else:
-                    pred, name = model.predict(x), "lightgbm"
-                served.add(name)
-                for r, p in zip(x["region"], pred):
-                    probs[r][t][h] = round(float(p), 4)
-                journal.append(pd.DataFrame({
-                    "origin": origin, "region": x["region"].to_numpy(), "target": t, "horizon": h,
-                    "p": pred, "clim": x[CLIM_COL[t]].to_numpy().astype(float),
-                    "issued_at": pd.Timestamp.now(tz="UTC"), "live": live.source == "alerts.in.ua",
-                }))
+        for r, t, h, p in zip(probs_long["region"], probs_long["target"], probs_long["horizon"], probs_long["p"]):
+            if r in probs:
+                probs[r][t][int(h)] = round(float(p), 4)
+        H = hourly_fraction(grid)
 
-        # Recent history for charts: hourly share under alert, last 72 h and 28-day hour-of-day profile.
+        # Recent history for charts: share of each 60-min block (ending at the origin) under alert,
+        # last 72 h, and the 28-day hour-of-day profile.
         n72 = min(72, H.shape[1])
         hours = grid.t0 + pd.to_timedelta(np.arange(H.shape[1] - n72, H.shape[1]), unit="h")
-        local_hour = (grid.t0 + pd.to_timedelta(np.arange(H.shape[1]), unit="h")).tz_convert(KYIV).hour.to_numpy()
+        local_hour = (grid.t0 + pd.to_timedelta(np.arange(H.shape[1]), unit="h")
+                      + pd.Timedelta(minutes=30)).tz_convert(KYIV).hour.to_numpy()
         last28 = slice(max(0, H.shape[1] - 28 * 24), H.shape[1])
         profile = {}
         for i, r in enumerate(grid.regions):
@@ -411,9 +395,6 @@ class ForecastEngine:
             }
             for h in HORIZONS
         }
-        known = self.recorder.known_until(hist_end)
-        cs = self.recorder.covered_since
-        gap_h = ((cs - hist_end) if cs is not None and cs > hist_end else (origin - known)) / pd.Timedelta(hours=1)
         warnings = []
         if live.source == "dataset":
             warnings.append("Немає живих даних (ALERTS_IN_UA_TOKEN не задано або API недоступне): "
@@ -423,7 +404,7 @@ class ForecastEngine:
                             "ознаки за останні години можуть бути занижені.")
         if live.error:
             warnings.append(live.error)
-        result = {
+        return {
             "origin": _iso(origin),
             "origin_kyiv": _kyiv(origin),
             "history_end": _iso(hist_end),
@@ -432,8 +413,10 @@ class ForecastEngine:
             "horizons": list(HORIZONS),
             "windows": windows,
             "warnings": warnings,
-            "model": {**{k: self.meta.get(k) for k in ("trained_at", "data_end", "selection_source")},
-                      "served": sorted(served), "text_status": text_status},
+            "model": {**{k: meta.get(k) for k in ("trained_at", "data_end", "selection_source")},
+                      "served": sorted(set(probs_long["model"])) if "model" in probs_long else ["lightgbm"],
+                      "text_status": str(probs_long["text_status"].iloc[0])
+                      if "text_status" in probs_long and len(probs_long) else "off"},
             "regions": [
                 {
                     "id": slug(r), "name": r, "name_uk": uk_name(r),
@@ -446,12 +429,10 @@ class ForecastEngine:
                 }
                 for i, r in enumerate(grid.regions)
             ],
+            "raions": self._raion_forecast(origin, probs, hist, raion_live),
         }
-        result["raions"] = self._raion_forecast(origin, probs, alerts)
-        return result, pd.concat(journal, ignore_index=True)
 
-    def _raion_forecast(self, origin, probs, alerts) -> dict | None:
-        rl = self._raion_live
+    def _raion_forecast(self, origin, probs, alerts, rl) -> dict | None:
         try:
             return self.raions.forecast(origin, probs, rl[0] if rl else None, rl[2] if rl else None, alerts,
                                         rl[1] if rl else None)
@@ -461,66 +442,63 @@ class ForecastEngine:
 
     # ---------------------------------------------------------- verification
     def verification(self, region: str | None = None, recent_hours: int = 24) -> dict:
-        """Compare issued forecasts with what happened, for windows that are fully observed."""
+        """Issued forecasts compared with what happened, for windows that are fully observed.
+
+        Store mode: the pipeline's forecasts and verify.py's outcomes from the
+        store (dataset labels preferred over store labels). Server mode: the
+        service's own journal, scored with the same minute-based labels.
+        """
         with self.lock:
             alerts, hist_end = self.alerts, self.hist_end
         if alerts is None:
             raise NotReady("no data")
-        J, known = self._verified_journal(alerts, hist_end)
-        out = {"journal_since": _iso(J["origin"].min()) if len(J) else None, "known_until": _iso(known),
-               "n_issued": int(J["origin"].nunique()) if len(J) else 0, "scores": [], "recent": {}}
-        if J.empty:
-            return out
-        V = J.dropna(subset=["y"])
-        out["n_verified"] = int(V["origin"].nunique())
-        for (t, h), q in V.groupby(["target", "horizon"]):
-            y, p, c = q["y"].to_numpy(), q["p"].to_numpy(), q["clim"].to_numpy()
-            hi, lo = p >= 0.5, p < 0.2
-            out["scores"].append({
-                "target": t, "horizon": int(h), "n": int(len(q)), "base_rate": float(y.mean()),
-                "brier": float(np.mean((p - y) ** 2)), "brier_clim": float(np.mean((c - y) ** 2)),
-                "bss_vs_clim": float(1 - np.mean((p - y) ** 2) / np.mean((c - y) ** 2)) if np.mean((c - y) ** 2) > 0 else None,
-                "n_high": int(hi.sum()), "hit_rate_high": float(y[hi].mean()) if hi.any() else None,
-                "n_low": int(lo.sum()), "event_rate_low": float(y[lo].mean()) if lo.any() else None,
-            })
-        out["scores"] = _clean(out["scores"])
-        if region is not None:
-            for t, h in (("active", 1), ("onset", 3)):
-                q = J[(J["region"] == region) & (J["target"] == t) & (J["horizon"] == h)].sort_values("origin").tail(recent_hours)
-                out["recent"][f"{t}_h{h}"] = [
-                    {"origin": _iso(o), "p": round(float(p), 3), "y": None if np.isnan(y) else int(y)}
-                    for o, p, y in zip(q["origin"], q["p"], q["y"])
-                ]
+        J, known = self._store_verified() if self.s.store_dir is not None else self._verified_journal(alerts, hist_end)
+        return site_summary(J, known, region=region, recent=recent_hours)
+
+    def _store_verified(self) -> tuple[pd.DataFrame, pd.Timestamp]:
+        root, now = self.s.store_dir, pd.Timestamp.now(tz="UTC")
+        since = now - pd.Timedelta(days=VERIFY_DAYS)
+        F = pit.load(root, "forecasts", since=since)
+        key = (len(F), F["issued_at"].max() if len(F) else None)
+        with self.lock:
+            if getattr(self, "_verified", None) and self._verified[0] == key:
+                return self._verified[1]
+        V = pit.load(root, "verification", since=since)
+        cols = ["origin", "region", "target", "horizon"]
+        known = pd.to_datetime(V["verified_at"], utc=True).max() if len(V) else None
+        if len(F):
+            F = F.copy()
+            F["origin"] = pd.to_datetime(F["origin"], utc=True)
+            F = F.sort_values("issued_at").drop_duplicates(cols, keep="last")
+            if len(V):
+                V = V.copy()
+                V["origin"] = pd.to_datetime(V["origin"], utc=True)
+                V = V.assign(_d=V["label_source"] == "dataset").sort_values(["_d", "verified_at"])
+                V = V.drop_duplicates(cols, keep="last")[cols + ["y", "label_source"]]
+                F = F.merge(V, on=cols, how="left")
+            else:
+                F = F.assign(y=np.nan, label_source=None)
+        out = (F[F["origin"] >= since].reset_index(drop=True) if len(F) else F, known)
+        with self.lock:
+            self._verified = (key, out)
         return out
 
     def _verified_journal(self, alerts, hist_end) -> tuple[pd.DataFrame, pd.Timestamp]:
         """Journal rows with the observed outcome `y` (NaN while the window is not fully observed). Cached."""
         J = self.journal.frame()
         known = self.recorder.known_until(hist_end)
-        key = (len(J), J["origin"].max() if len(J) else None, known.floor("h"), hist_end, self.recorder.version())
+        key = (len(J), J["origin"].max() if len(J) else None, known.floor("min"), hist_end, self.recorder.version())
         with self.lock:
             if getattr(self, "_verified", None) and self._verified[0] == key:
                 return self._verified[1], known
         if J.empty:
             return J.assign(y=np.nan), known
-        grid = build_grid(self._history(alerts), data_end=known.floor("h"))
-        H, S = hourly_fraction(grid), hourly_starts(grid)
-        J["k"] = ((J["origin"] - grid.t0) / pd.Timedelta(hours=1)).round().astype(int)
-        J = J[J["region"].isin(grid.regions) & (J["k"] >= 1)].reset_index(drop=True)
-        r_idx = {r: i for i, r in enumerate(grid.regions)}
-        ys = np.full(len(J), np.nan)
-        for (t, h), q in J.groupby(["target", "horizon"]):
-            ks = q["k"].to_numpy()
-            ok = ks + h <= H.shape[1]
-            ri = q["region"].map(r_idx).to_numpy()
-            y = np.full(len(q), np.nan)
-            if t == "active":
-                y[ok] = H[ri[ok], ks[ok] + h - 1] > 0
-            else:
-                win = ks[ok][:, None] + np.arange(h)
-                y[ok] = S[ri[ok][:, None], win].max(axis=1)
-            ys[q.index.to_numpy()] = y
-        J["y"] = ys
+        J = J.copy()
+        J["origin"] = pd.to_datetime(J["origin"], utc=True)
+        # the record is complete up to the dataset's last hour, or up to the last poll of an unbroken run
+        end = known.floor("min") if known > hist_end else hist_end.floor("h")
+        hist = self._history(alerts)
+        J["y"] = outcomes(J, build_grid(hist[hist["start"] < end], data_end=end))
         with self.lock:
             self._verified = (key, J)
         return J, known

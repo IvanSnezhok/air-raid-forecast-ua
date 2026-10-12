@@ -26,8 +26,17 @@ jobs:
         run: pytest tests/test_leakage.py -q
       - name: Live data (merge definition, point-in-time store, verification)
         run: pytest tests/test_live_alerts.py tests/test_store.py tests/test_verify.py -q
+      - name: Pipeline glue (gate, keep-alive, status, model cache key)
+        run: pytest tests/test_pipeline_glue.py -q
+      - name: Workflow and pipeline scripts parse
+        run: |
+          pip install -q pyyaml
+          python -c "import yaml, glob; [yaml.safe_load(open(f)) for f in glob.glob('.github/workflows/*.yml')]"
+          bash -n .github/scripts/*.sh
       - name: Threat-type no-leakage tests
         run: pytest threat-type/tests -q
+      - name: Raion no-leakage tests (downloads the official raion file)
+        run: pytest tests/test_raion_leakage.py -q
       - name: Telegram text signals tests (no leakage, serving fallback; synthetic, offline)
         run: pytest tests/test_text_leakage.py tests/test_text_serving.py -q
       - name: Docker image builds

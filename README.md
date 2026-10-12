@@ -1,8 +1,9 @@
 # Air raid alert forecasting for Ukraine
 
-Hourly, per-region probabilistic forecasts of air raid alerts for the next 1–6 hours,
-built from the full alert history since February 2022 and evaluated on the **latest
-four weeks** (12 Sep – 11 Oct 2026) with a strict, leak-free walk-forward protocol.
+Per-region probabilistic forecasts of air raid alerts for the next 1–6 hours, refreshed
+**every 10 minutes** (see [Automation](#automation)), built from the full alert history
+since February 2022 and evaluated on the **latest four weeks** (12 Sep – 11 Oct 2026)
+with a strict, leak-free walk-forward protocol.
 
 Two questions are answered for each of 24 regions (23 oblasts + Kyiv City) at every
 hour T:
@@ -19,7 +20,7 @@ each of the 119 raions with data, evaluated on its own: see [Raion level](#raion
 
 ```bash
 pip install -r requirements.txt
-python -m pytest            # leakage + verification tests (about 15 s)
+python -m pytest            # leakage, verification, pipeline and web app tests (about 1.5 min)
 python run.py               # full evaluation: model selection + 4-week walk-forward (about 30 min on 4 cores)
 python run.py --reuse-selection   # skip model selection, reuse reports/selection.json
 python predict_now.py       # live forecast for the next 6 hours (+ appends to the forecast log)
@@ -33,7 +34,8 @@ python raion_latest.py --store live-data    # latest 4 weeks with alerts.in.ua l
 git worktree add live-data origin/live-data
 python predict_now.py --store live-data   # fills the hours after the dataset, logs to the store
 python verify.py --store live-data        # verifies within hours instead of a day later
-python -m airraid.collect poll --root live-data      # what the collect workflow runs (needs the token)
+python -m airraid.collect poll --root live-data      # what the pipeline runs every 10 min (needs the token)
+python scripts/train_models.py --out var/models      # what the train job runs (the served model set)
 ```
 
 `predict_now.py` and the collector read an alerts.in.ua token from the
@@ -179,6 +181,10 @@ channel before our backfill are missing (a survivorship gap live collection does
   the features computed from the full data. I checked that the test bites by injecting
   two leaks: a lag-0 feature, and "minutes since last alert ended" using the end of the
   running alert. Both made the test fail.
+* **Sub-hour origins** (the 10-minute pipeline forecasts from any minute): the same
+  truncation test at :10/:23/:40/:50 origins, a check that the hour blocks are exactly
+  the minutes [T−60, T) and [T, T+h), and a mutation test that a feature reading the end
+  of the running alert makes it fail (see "Automation").
 * **Label test:** wiping all history before T must not change the labels.
 * **Text features** (`tests/test_text_leakage.py`, synthetic archive, runs in CI):
   features at T recomputed from only the posts available before T must equal the
@@ -377,9 +383,9 @@ the fact; live, the rule can only use the last activation before the forecast ti
 ### Point-in-time store (`src/airraid/store.py`, branch `live-data`)
 
 Everything the live system sees or says is kept, with the moment it became known, on the
-orphan branch `live-data` (`.github/workflows/collect.yml`: a poll every 10 min, the
-alerts.in.ua history once a day; the API only keeps ~30 days, so it was backfilled on
-2026-10-11 from 2026-09-11):
+orphan branch `live-data` (`.github/workflows/pipeline.yml`: a poll every 10 min;
+`collect.yml`: the alerts.in.ua history once a day; the API only keeps ~30 days, so it
+was backfilled on 2026-10-11 from 2026-09-11):
 
 ```
 live-data/<kind>/<YYYY-MM-DD>/<stamp>-<hash>.parquet   one immutable file per append (UTC day)
@@ -391,6 +397,7 @@ live-data/<kind>/<YYYY-MM-DD>/<stamp>-<hash>.parquet   one immutable file per ap
                   trained_until, hist_end, git_sha, live
   verification    scored forecasts, verified_at, label_source
 live-data/_state/history.json   collector bookkeeping (resume, If-Modified-Since)
+live-data/_state/pipeline.json  the last pipeline run: time, step timings, data ends (= the site's api/status.json)
 ```
 
 `store.load(root, kind, as_of=T)` returns only rows known at T (`observed_at` /
@@ -401,7 +408,7 @@ became known). Files are never rewritten, so git grows only by new rows.
 ### What is and is not leak-free
 
 * **Training never sees live data.** Models are fit on the volunteer file only, on origins
-  whose label window it fully covers (`predict_now.grids`). Before this fix the training
+  whose label window it fully covers (`airraid.training`, `predict_now.grids`). Before this fix the training
   grid included the live records: frontline oblasts got weeks of fake "alert running, no
   new alert" rows, and the hourly run forecast `active` 0.999 / `onset` 0.000 for 6 h in
   Dnipropetrovska and Kharkivska, which have about 20 alerts a day.
@@ -619,10 +626,14 @@ labelled `models_source: "none"` in `/api/raions`).
 ## Learning loop (live)
 
 * `predict_now.py` forecasts the next 6 hours for every region and appends each forecast
-  to `reports/forecast_log.csv` and, with `--store`, to the store's `forecasts`.
-* **Retraining is a periodic refit**, not online learning: at most once every 24 h
-  (`--retrain-hours`) the models are refit from scratch on the volunteer file as known at
-  that moment, and reused in between (`models/`, not committed).
+  to `reports/forecast_log.csv` and, with `--store`, to the store's `forecasts`. The
+  origin is the first whole minute after the newest poll, so the 10-minute pipeline
+  issues a new forecast every run (see "Sub-hour origins" below).
+* **Retraining is a periodic refit**, not online learning: the train job
+  (`.github/workflows/train.yml`, `scripts/train_models.py`) refits the models from
+  scratch on the volunteer file as known at that moment, daily and whenever the dataset
+  has 6 h more data than the served models; everything else only loads that bundle
+  (`airraid.training`, `--models var/models`, not committed).
 * `verify.py` looks up what actually happened once a forecast's horizon has passed and
   writes `reports/verification.csv` and `reports/verification_summary.json`: Brier of
   the model vs climatology over the last 24 h / 7 d / all time, hit rate, recall and
@@ -631,9 +642,9 @@ labelled `models_source: "none"` in `/api/raions`).
   hours instead of a day later), and appends the result to the store. **Verification is
   monitoring:** it does not feed back into model weights. `tests/test_verify.py` checks
   that it uses exactly the training labels.
-* `predict_now.py --as-of 2026-10-10T12:00` replays the live path at a past hour: data
-  after that hour is dropped, store rows are used as they were known then, and models are
-  retrained.
+* `predict_now.py --as-of 2026-10-10T12:20` replays the live path at a past minute: data
+  after it is dropped, store rows are used as they were known then, and models are
+  retrained on the truncated dataset.
 * **Telegram model** (`--text-root text-data`, or `AIRRAID_TEXT_ROOT` for the web app):
   before forecasting, the newest posts are fetched into the archive (and kept there),
   the text features at the origin are built by the same code `run.py` evaluates, and the
@@ -646,6 +657,157 @@ labelled `models_source: "none"` in `/api/raions`).
   never trained in the forecast run: the boosters a separate job saved
   (`python -m airraid.text.serving train --root text-data --model-dir <models>/text`) are
   served whatever their age, else the history-only model, and `text_status` says so.
+
+## Automation
+
+Everything runs on GitHub Actions; nothing needs a laptop or a server.
+
+```
+ every 10 min (:03, :13, ...)   keep-alive / pinger / by hand
+            │                              │
+            ▼                              ▼
+ pipeline.yml ── gate ── skip if the last update is < 5 min old (duplicate trigger)
+            │
+            ▼ run (one at a time: concurrency group, never cancelled)
+   1 check out the store            live-data, tip only: 31 days of observations, 10 of outputs
+   2 restore the served models      Actions cache  ◄──────────── train.yml (daily, on new data, by hand):
+   3 download the dataset                                          oblast models + holdout week, raion
+     (+ official raion file, cached)                               models, history + Telegram models
+   4 poll alerts.in.ua              → store: polls, alerts_active
+   5 update the text archive        → text-data: new Telegram posts and news (pipeline = only writer),
+                                      fetched once the origin minute has begun (0–60 s wait)
+   6 forecast (predict_now.py)      → store: forecasts, with the served model per row (history-only
+                                      or history + Telegram); trains once only if no oblast models
+   7 threat type (after 6)          P(onset) × P(type | onset), same origin, posts from text-data
+   8 verify (verify.py)             → store: verification     (24 h / 7 d Brier vs climatology, hit rate)
+   9 build the static site          same models, forecast and verification; raion layer with the
+                                      saved raion models (store mode, AIRRAID_*_TRAIN=0: no training)
+  10 status.json                    → site api/status.json + store _state/pipeline.json
+  11 commit live-data and text-data new partitions / archive files, rebase-and-retry
+  12 dispatch train.yml             if the dataset has 6 h more data than the models, or a layer is missing
+            │
+            ├─ deploy ── GitHub Pages (main only)
+            └─ keep-alive ── wait for the next slot + 3 min; if nothing started a newer run, dispatch one
+ collect.yml (daily 02:41)  alerts.in.ua 30-day history → store (alongside the pipeline, own _state file)
+```
+
+| what | where it lives | written by |
+|---|---|---|
+| polls, active alerts, history pulls, forecasts, verification, run status | branch `live-data` (append-only parquet, `src/airraid/store.py`) | pipeline, collect-history |
+| Telegram posts and news, as first seen | branch `text-data` (`src/airraid/text/archive.py`) | pipeline (text-collect.yml by hand) |
+| served model bundle: oblast models (`airraid.training`), `raions/`, `text/` | Actions cache `models-v2-<code hash>-<data end>-<trained at>` | train.yml (pipeline only as a fallback, oblast models only) |
+| official raion-level file (stopped updating 2026-09-07) | Actions cache `official-data-en-v1` | pipeline / train job, downloaded once |
+| the site (`api/*.json`, UI) | GitHub Pages | pipeline (deploy job) |
+| Air Force posts (threat-type model) | branch `threat-labels-data` | threat-labels.yml |
+
+**Cadence and timings.** A run starts every 10 minutes and takes about a minute; measured
+on GitHub-hosted runners on 11 Oct 2026 (runs 2, 4 and 5 of the end-to-end test):
+
+| step | seconds |
+|---|---|
+| setup: checkout, Python, packages (pip cache), model cache restore | 23–26 |
+| check out the store (last 10 days, no blobs) | 0.5–0.9 |
+| download the dataset / poll alerts.in.ua | 0.6–0.8 / 0.7–0.8 |
+| forecast with the cached models | 3.3–3.5 |
+| threat-type forecast (retrains its two small models) | 25–27 |
+| verify | 1.8–1.9 |
+| build the static site | 5.4–6.0 |
+| **run job, start to store commit** | **67–72** |
+
+The gate job takes 3–6 s. Without a model cache (first run, changed modelling code) the
+forecast step trains the serving models itself in about 90 s; the train job (holdout
+week + final refit) takes about 3.5 minutes. The forecast is logged about 3 s after the
+poll and the site is built about 40 s after it.
+
+**Sub-hour origins.** The forecast origin is the first whole minute after the newest poll
+(`airraid.nowcast`), so every run forecasts "the next 60 minutes from 14:13", not the
+14:00 forecast again. Every feature and label is defined on hour blocks of the minute
+grid; `data.build_grid` shifts the grid start so that the blocks end exactly at the
+origin (the lags at 14:13 are 13:13–14:13, …, hour 1 is 14:13–15:13), and the calendar
+features use the Kyiv hour of the target block's midpoint (unchanged for top-of-hour
+origins, so training is unchanged). Nothing after the origin is used: store rows known
+at the origin (≤ origin) and records that started before it. The truncation test now
+also runs at :10/:23/:40/:50 origins, an independent check confirms the blocks are the
+minutes [T−60, T) and [T, T+h), and a mutation test confirms the check fails for a leaky
+feature (`tests/test_leakage.py`). Models trained on top-of-hour origins stay calibrated
+off the hour (`scripts/backtest_subhour.py`, every origin of 13 Sep – 11 Oct 2026 at each
+offset, models trained on data before it):
+
+| target | h | Brier :00 | Brier :20 | Brier :40 | skill :00 | skill :20 | skill :40 | ECE :00 | ECE :20 | ECE :40 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| active | 1 | 0.1323 | 0.1308 | 0.1308 | +0.278 | +0.288 | +0.286 | 0.012 | 0.011 | 0.013 |
+| active | 3 | 0.1781 | 0.1781 | 0.1775 | +0.027 | +0.030 | +0.031 | 0.014 | 0.012 | 0.016 |
+| onset | 1 | 0.1467 | 0.1468 | 0.1465 | +0.044 | +0.047 | +0.046 | 0.013 | 0.011 | 0.012 |
+| onset | 3 | 0.1751 | 0.1752 | 0.1746 | +0.034 | +0.031 | +0.033 | 0.023 | 0.023 | 0.023 |
+| onset | 6 | 0.1326 | 0.1319 | 0.1318 | +0.025 | +0.026 | +0.029 | 0.024 | 0.024 | 0.023 |
+
+(all offsets :00–:50 and horizons in `reports/subhour_backtest.md`; skill = Brier skill vs
+the 28-day climatology, ECE = expected calibration error, 10 bins). No offset is worse
+than :00 by more than 0.0015 Brier, so the models are not retrained on mixed-phase origins.
+
+**Why a keep-alive, and why it is bounded.** GitHub runs `schedule` best effort: in this
+repository the hourly forecast cron (`7 * * * *`) fired twice between 08:40 and 22:30 UTC
+on 11 Oct 2026, the 3-hourly Pages cron 48 minutes late, the 30-minute Telegram cron
+twice. A 10-minute site cannot rely on it. The layers, from most to least reliable:
+
+1. **External pinger** (recommended, needs the owner): cron-job.org calls the
+   `workflow_dispatch` endpoint every 10 minutes with a fine-grained token that can only
+   run Actions in this repository (step by step in `deploy/README.md`).
+2. **Keep-alive** (on by default): after every run (also one the gate skipped as a
+   duplicate) a small job waits until the next slot + 3 minutes, checking every 20 s,
+   and dispatches the workflow only if nothing (cron, pinger, a person) has started a
+   newer run by then; as soon as a newer run appears it exits. It is a dead man's
+   switch, not a loop: runs never overlap (one concurrency group), a chain of runs
+   started only by the keep-alive stops after `PIPELINE_KEEPALIVE_MAX_HOPS` (default
+   72, about 12 hours) until a real trigger restarts it, and `PIPELINE_KEEPALIVE=off`
+   disables it. In the end-to-end test (PR #10) a run finished at 22:49, nothing else
+   started one for the 22:53 slot, and the keep-alive dispatched the next run at
+   22:56:02, which ran normally and continued the chain.
+3. **`schedule`** every 10 minutes at :03/:13/… (off the congested top of the hour).
+
+Terms: Actions minutes on standard runners are free and unlimited for public
+repositories, jobs are capped at 6 hours (ours: 30 minutes, the keep-alive 20), at most
+one pipeline run executes at a time, and the work is the project's own build, forecast
+and publication, which is what Actions is for. The cost of the keep-alive is honest to
+state: while it is on, one runner is reserved between runs, mostly sleeping (about
+8 of every 10 minutes). With the external pinger configured it is not needed and should
+be switched off; that is the recommended setup.
+
+**Robustness.** The poll, threat-type and verification steps are `continue-on-error`
+(the forecast then uses the last stored poll; the site keeps the previous layer). The
+store commit runs even when the forecast failed, so no observation is lost; pushes
+rebase over the daily history job. When the model cache is empty or stale (evicted
+after 7 days unused, modelling code changed: the key contains its hash) the pipeline
+trains once without the holdout, saves the bundle and asks the train job for a full
+one. A gate skips triggers that land within 5 minutes of the last update. The site
+shows "updated HH:MM" and a warning when its data is more than 30 minutes old.
+
+**Raion and text layers.** Their models are trained only by the train job and travel in the
+same cached bundle: `scripts/train_models.py --raions` trains the raion models on the
+official file and the store's raion history and saves them to `<models>/raions`
+(`RaionForecaster.save`); `python -m airraid.text.serving train` saves the history +
+Telegram models to `<models>/text`. The pipeline sets `AIRRAID_RAION_TRAIN=0` and
+`AIRRAID_TEXT_TRAIN=0`, so the forecast and the site build only load them: without saved
+raion models the raion forecast is oblast × share (`models_source: "none"`), without text
+models the history-only model serves (`text_status` says why), and the next train run is
+requested. The text features at the origin need the archive complete up to it, and the
+origin is the first whole minute after the poll, so the archive update waits for that
+minute to begin (`pipeline.py wait-origin`, about 30 s on average) rather than serve
+the history-only model for want of a few seconds of coverage. The cache key hashes the
+raion and text code and selections too. `status.json`
+reports the served model (`model.served`, `model.text_status`) and the raion layer
+(`raions.models_source`, `tier`, and how many values each method produced).
+
+**What the owner must configure**
+
+1. Settings → Pages → Source: **GitHub Actions** (the `github-pages` environment accepts
+   `main` only; that is where the pipeline deploys from).
+2. Secret `ALERTS_IN_UA_TOKEN` (already set). Without it the site shows the forecast as of
+   the end of the volunteer dataset.
+3. Optional: the external pinger (`deploy/README.md`), then `PIPELINE_KEEPALIVE=off`.
+4. Optional: variables `PIPELINE_KEEPALIVE` (`off`), `PIPELINE_KEEPALIVE_MAX_HOPS`.
+5. Optional: secret `HF_TOKEN` + variable `HF_SPACE` for the FastAPI server on a Hugging
+   Face Space (`deploy-space.yml`, creates the Space and copies the alerts token).
 
 ## What went wrong along the way
 
@@ -682,8 +844,9 @@ labelled `models_source: "none"` in `/api/raions`).
 * The volunteer data is updated about once a day. Without the store or a token the
   "current state" features lag by up to a day; with them, the gap is filled from
   alerts.in.ua records, which only approximate the volunteer channel (see "Live data").
-* The store starts on 2026-09-11; scheduled collection runs only once collect.yml is on
-  the default branch.
+* The store starts on 2026-09-11. Scheduled runs (pipeline, train, history) start only
+  once the workflows are on the default branch, and GitHub's schedule is best effort
+  (see "Automation" for the keep-alive and the external pinger).
 * The alert data itself does not say *why* an alert was declared; the Telegram features
   add it only as regex-tagged mentions (`src/airraid/text/lexicon.py`). Known tagging
   errors: "Дніпро" is also the river, Kyiv city vs Kyiv oblast are used loosely, a
@@ -714,17 +877,27 @@ labelled `models_source: "none"` in `/api/raions`).
 
 ```
 src/airraid/   data.py (load, clean, minute grid) · features.py · models.py · evaluate.py
-               live_alerts.py (alerts.in.ua parsing, live definition) · store.py · collect.py
+               training.py (the served model set) · nowcast.py (origin rule, live forecast)
+               verification.py · live_alerts.py (alerts.in.ua parsing, live definition)
+               store.py · collect.py
                raions.py (raion registry, names, UIDs) · raion_data.py · raion_features.py
+src/airraid_app/  web app (FastAPI) and the engine behind the static site
 run.py         evaluation pipeline → reports/
 raion_run.py · raion_latest.py   raion forecast evaluation → reports/raions/
 predict_now.py live forecast + forecast log
 verify.py      forecast verification
+scripts/pipeline.py         glue for the workflows: gate, timings, status, keep-alive, retrain trigger
+scripts/train_models.py     the train job
+scripts/build_static_site.py   the GitHub Pages site (store mode in the pipeline)
+scripts/backtest_subhour.py    calibration at :00 vs :10 ... :50 origins
 scripts/live_definition_check.py   live definition vs the training data
+.github/workflows/   pipeline.yml (10 min) · train.yml · collect.yml (daily history) · ci.yml
+                     deploy-space.yml (optional) · threat-labels.yml
 src/airraid/text/  Telegram and news: archive.py (point-in-time store) · telegram.py · news.py
                lexicon.py · features.py · live.py · serving.py · collect.py (CLI)
 text-features/ optional Telethon collector writing the same archive
-tests/         leakage, live merge, store, verification and text-signal tests
+tests/         leakage (incl. sub-hour origins), live merge, store, verification, pipeline glue,
+               raion and text-signal tests
 reports/       metrics tables, figures, selection.json, text_ablation.*
 branch text-data   the point-in-time text archive (JSONL per channel and month)
 ```

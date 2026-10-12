@@ -1,17 +1,20 @@
-# Deploy the web app to a Hugging Face Space (free CPU, Docker SDK).
+# Deploy the web app (FastAPI server, Docker) to a Hugging Face Space. Optional:
+# the primary site is the static GitHub Pages build of pipeline.yml.
 #
-# One-time setup:
-#   1. Create a Space at https://huggingface.co/new-space with SDK "Docker".
-#   2. Repo Settings -> Secrets and variables -> Actions:
-#        secret   HF_TOKEN  (a Hugging Face token with write access)
-#        variable HF_SPACE  e.g. "your-name/air-raid-forecast"
-#   3. In the Space settings add the secret ALERTS_IN_UA_TOKEN (optional).
-# The job is skipped until HF_SPACE is set.
+# One-time setup (Settings -> Secrets and variables -> Actions):
+#   secret   HF_TOKEN  a Hugging Face token with write access
+#   variable HF_SPACE  e.g. "your-name/air-raid-forecast" (created if missing)
+# ALERTS_IN_UA_TOKEN, if set here, is copied into the Space's secrets. The job is
+# skipped until HF_SPACE is set; with HF_SPACE but no HF_TOKEN it fails loudly.
+# Uploads through the Hub API (.github/scripts/deploy_space.py): a plain git push
+# is rejected by the Hub because the repository has binary files.
 name: deploy-space
 
 on:
   push:
     branches: [main]
+    paths: ["src/**", "Dockerfile", "pyproject.toml", "reports/run_summary.json", "deploy/huggingface/**",
+            ".github/workflows/deploy-space.yml", ".github/scripts/deploy_space.py"]
   workflow_dispatch:
 
 concurrency:
@@ -25,19 +28,16 @@ jobs:
   deploy:
     if: vars.HF_SPACE != ''
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: Push to the Space
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -q "huggingface_hub>=0.24"
+      - name: Upload to the Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_SPACE: ${{ vars.HF_SPACE }}
-        run: |
-          # The Space repo needs its own README with the Docker SDK front matter.
-          cp deploy/huggingface/README.md README.md
-          rm -rf .git/shallow .github
-          git config user.email "actions@github.com"
-          git config user.name "github-actions"
-          git checkout --orphan space
-          git add -A
-          git commit -qm "Deploy ${GITHUB_SHA::7}"
-          git push --force "https://user:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE}" space:main
+          ALERTS_IN_UA_TOKEN: ${{ secrets.ALERTS_IN_UA_TOKEN }}
+        run: python .github/scripts/deploy_space.py

@@ -1,14 +1,12 @@
 # Collect text signals (public Telegram channels via the t.me/s web preview, news
 # RSS, GDELT news history) into the point-in-time archive on the `text-data` branch.
-# All logic is in `python -m airraid.text.collect`; this file only schedules it,
-# so a single pipeline can call the same commands instead. Public sources only,
-# no secrets.
+# All logic is in `python -m airraid.text.collect`. The 10-minute pipeline
+# (pipeline.yml) runs `update` and commits text-data in every run, so it is the one
+# writer of that branch; this workflow has no schedule any more and is for manual
+# runs (GDELT history, a backfill). Public sources only, no secrets.
 name: text-collect
 
 on:
-  schedule:
-    # Hourly. `update` fetches only what is new and takes well under a minute.
-    - cron: "23 * * * *"
   workflow_dispatch:
     inputs:
       gdelt_days:

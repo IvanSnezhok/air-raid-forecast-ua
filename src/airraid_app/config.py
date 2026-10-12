@@ -22,9 +22,12 @@ class Settings:
     model_dir: Path = ROOT / "var" / "models"
     state_dir: Path = ROOT / "var" / "state"  # live alert log and forecast journal
     reports_dir: Path = ROOT / "reports"
-    # Raion-level history: the official alert file (stopped 2026-09-07) and, when
-    # available, the live alert store written by the collector (airraid.store).
+    # Raion-level history: the official alert file (stopped 2026-09-07).
     official_path: Path = OFFICIAL_PATH
+    # Point-in-time store (live-data checkout, airraid.store) written by the pipeline: the raion
+    # history after the official file and, for the oblast forecast, store mode: the live state,
+    # the gap after the dataset, the forecasts and their verification are read from it (the
+    # static site). AIRRAID_STORE, same variable as predict_now.py.
     store_dir: Path | None = None
     # Train the raion models (a few hundred MB while training); off on 512 MB hosts:
     # the raion layer then derives raion forecasts from the oblast forecast.

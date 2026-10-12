@@ -11,7 +11,7 @@ Python-бекенд на FastAPI з веб-інтерфейсом. Показу�
 | Шлях | Що це |
 |---|---|
 | `src/airraid/` | модельний пакет: дані, ознаки без витоку майбутнього, моделі, метрики (спільний з `run.py` і `predict_now.py`) |
-| `src/airraid_app/engine.py` | рушій сервісу: завантажує історію, навчає по LightGBM на кожну пару «ціль × горизонт», кешує моделі на диск, рахує прогноз на поточну годину |
+| `src/airraid_app/engine.py` | рушій сервісу і статичного сайту: завантажує історію, віддає набір моделей `airraid.training` (той самий, що навчає `train.yml` і використовує 10-хвилинний конвеєр), рахує прогноз через `airraid.nowcast`; у режимі сховища (`AIRRAID_STORE`) читає опитування, прогнози і перевірку з гілки `live-data` |
 | `src/airraid_app/journal.py` | запис живих тривог і журнал виданих прогнозів для перевірки |
 | `src/airraid_app/threats.py` | читання прогнозу типу загрози (дрони / ракети / балістика, жовтий / червоний рівень) |
 | `src/airraid_app/live.py` | поточний стан: alerts.in.ua (якщо є токен) або стан на кінець датасету |
@@ -66,8 +66,13 @@ docker run -p 7860:7860 -e ALERTS_IN_UA_TOKEN=... airraid
 
 ## Як рахується прогноз
 
-* Момент прогнозу: початок поточної години (з токеном alerts.in.ua) або остання повна
-  година датасету (без токена). Вікна прогнозу в API і на сторінці подано в абсолютному часі.
+* Момент прогнозу: перша ціла хвилина після останнього опитування alerts.in.ua
+  (`airraid.nowcast.origin_after`) або остання повна година датасету (без живих даних).
+  «Година 1» це наступні 60 хвилин від цього моменту (для 14:23: 14:23–15:23), «година 2»
+  наступні 60 і так далі; погодинні блоки сітки вирівнюються так, щоб закінчуватися в момент
+  прогнозу (`airraid.data.grid_start`), тому моделі, навчені на прогнозах від початку
+  години, бачать ті самі ознаки (перевірка на витік і калібрування для :10…:50 у README,
+  розділ «Sub-hour origins»). Вікна прогнозу в API і на сторінці подано в абсолютному часі.
 * З токеном поточні тривоги з alerts.in.ua додаються до історії як «триває зараз», але з
   тим самим визначенням, на якому навчена модель (`airraid.live_alerts`, числа в README,
   розділ «Live data»): тривога будь-якого рівня (область, район, громада, місто) починає
@@ -87,22 +92,33 @@ docker run -p 7860:7860 -e ALERTS_IN_UA_TOKEN=... airraid
   перенавчається на всіх даних.
 * Якщо `reports/run_summary.json` від `run.py` є, вікно навчання і кількість дерев
   беруться з вибору на валідації; інакше 12 місяців і 300 дерев.
-* **Перевірка виданих прогнозів.** Кожен прогноз записується в журнал
-  (`var/state/forecast_journal.parquet`). Коли прогнозована година минає і про неї є дані,
-  прогноз звіряється з фактом: `/api/verification`, розділ «Перевірка живих прогнозів» на
-  сторінці якості і смужка «Минулі прогнози і що сталося» в деталях області.
+* **Перевірка виданих прогнозів.** Сервер записує прогноз у журнал
+  (`var/state/forecast_journal.parquet`, не частіше ніж раз на 10 хв); у режимі сховища
+  журналом є `forecasts` на гілці `live-data`, а результати пише `verify.py` у
+  `verification`. Коли прогнозоване вікно минає і про нього є дані, прогноз звіряється з
+  фактом тими самими мітками, що й у навчанні (у хвилинах від моменту прогнозу,
+  `airraid.verification`): `/api/verification` (останні 24 год і 7 днів: Brier моделі
+  проти кліматології, влучність), розділ «Перевірка живих прогнозів» на сторінці якості і
+  смужка «Минулі прогнози і що сталося» в деталях області (один прогноз на годину).
 * **Запис живих тривог.** Кожне опитування alerts.in.ua перетворюється на інтервали тривог
   областей за тим самим визначенням (`var/state/live_alerts.csv`, з `observed_at`
   опитування). Вони закривають розрив між кінцем датасету і «зараз» і для ознак, і для
   перевірки, але тільки після кінця датасету. Якщо сервіс спав довше 15 хв, покриття
   починається заново, щоб не вважати невідомий час спокійним.
 * Для GitHub Actions те саме робить точкове сховище на гілці `live-data`
-  (`src/airraid/store.py`, `.github/workflows/collect.yml`): опитування кожні 10 хв і
-  щоденна історія alerts.in.ua, кожен рядок з моментом, коли він став відомий.
+  (`src/airraid/store.py`; `.github/workflows/pipeline.yml` опитує кожні 10 хв,
+  `collect.yml` раз на добу тягне історію alerts.in.ua), кожен рядок з моментом, коли він
+  став відомий. Сервер теж може читати це сховище: `AIRRAID_STORE=<checkout live-data>`
+  (режим сховища: стан, прогноз і перевірка звідти, а не з власних опитувань), якщо поруч
+  щось його оновлює (`python -m airraid.collect poll` і `predict_now.py --store` за cron).
 * На Hugging Face Spaces диск без платного persistent storage скидається при рестарті,
   тому журнал і запис живих тривог починаються заново після кожного перезапуску Space.
-* Фоновий потік оновлює живий стан щохвилини, датасет кожні 6 год і перенавчає
-  моделі, коли дані посунулись на добу.
+* Фоновий потік сервера оновлює живий стан щохвилини, датасет кожні 6 год і перенавчає
+  моделі, коли дані посунулись на добу. Модель зберігається у форматі `airraid.training`
+  з версією коду: сервер, конвеєр і статичний сайт ніколи не віддають моделі, навчені
+  старим кодом ознак.
+* `/api/status`: коли оновлено дані й прогноз. Сторінка показує «Оновлено о ГГ:ХХ» і
+  попереджає, якщо даним понад 30 хв.
 
 ## Райони
 
@@ -143,8 +159,9 @@ docker run -p 7860:7860 -e ALERTS_IN_UA_TOKEN=... airraid
 
 Окрема модель (`threat-type/`, PR #5) оцінює, яким буде наступна тривога: ударні дрони
 (жовтий рівень) чи ракети, балістика, КАБ або масована атака дронів (червоний). Вона потребує
-історії повідомлень Повітряних сил, тому працює в GitHub Actions і щогодини публікує
-`type_forecast_now.csv` поруч зі статичною сторінкою. Застосунок лише читає цей файл
+історії повідомлень Повітряних сил, тому працює в GitHub Actions: 10-хвилинний конвеєр запускає
+її після основного прогнозу (той самий момент прогнозу, P(нова тривога) × P(тип | тривога)) і
+публікує `type_forecast_now.csv` поруч зі статичною сторінкою. Застосунок лише читає цей файл
 (`AIRRAID_TYPE_FORECAST`, локальний шлях або URL, оновлення кожні 10 хв) і показує шар
 «Тип загрози» на мапі та розподіл типів у деталях області. Без файлу шар просто прихований.
 
@@ -155,7 +172,8 @@ docker run -p 7860:7860 -e ALERTS_IN_UA_TOKEN=... airraid
 | `ALERTS_IN_UA_TOKEN` | – | токен alerts.in.ua для живого стану |
 | `PORT` | 8000 (7860 у Docker) | порт |
 | `AIRRAID_DATA_PATH` | `data/raw/volunteer_data_en.csv` | де лежить датасет |
-| `AIRRAID_MODEL_DIR` | `var/models` | кеш моделей |
+| `AIRRAID_MODEL_DIR` | `var/models` | набір моделей (`airraid.training`; конвеєр відновлює його з кешу Actions) |
+| `AIRRAID_STORE` | – | checkout гілки `live-data`: режим сховища (стан, прогноз і перевірка з нього) |
 | `AIRRAID_STATE_DIR` | `var/state` | журнал прогнозів і запис живих тривог |
 | `AIRRAID_REPORTS_DIR` | `reports` | звідки читати `run_summary.json` і `metrics_test.csv` |
 | `AIRRAID_TYPE_FORECAST` | `threat-type/reports/type_forecast_now.csv`, якщо є | прогноз типу загрози (шлях або URL), напр. `https://ivansnezhok.github.io/air-raid-forecast-ua/type_forecast_now.csv` з GitHub Pages |
@@ -179,19 +197,21 @@ docker run -p 7860:7860 -e ALERTS_IN_UA_TOKEN=... airraid
 **Рекомендовано: Hugging Face Spaces (Docker).** Безкоштовний CPU-контейнер: 2 vCPU, 16 ГБ RAM,
 засинає лише після 48 год без відвідувань. Навчання на старті займає кілька хвилин.
 
-1. Створити Space на https://huggingface.co/new-space, SDK: Docker.
-2. У цьому репозиторії: Settings -> Secrets and variables -> Actions: секрет `HF_TOKEN`
-   (токен Hugging Face з правом запису) і змінна `HF_SPACE` (наприклад `ivansnezhok/air-raid-forecast`).
-3. У налаштуваннях Space додати секрет `ALERTS_IN_UA_TOKEN` (необовʼязково).
-4. Кожен пуш у `main` (або ручний запуск `deploy-space`) викладає застосунок у Space.
+1. У цьому репозиторії: Settings -> Secrets and variables -> Actions: секрет `HF_TOKEN`
+   (токен Hugging Face з правом запису, https://huggingface.co/settings/tokens) і змінна
+   `HF_SPACE` (наприклад `ivansnezhok/air-raid-forecast`).
+2. Запустити `deploy-space` вручну (Actions -> deploy-space -> Run workflow) або запушити в
+   `main`. Workflow сам створює Space (SDK Docker), якщо його немає, і копіює туди секрет
+   `ALERTS_IN_UA_TOKEN`, якщо він заданий у репозиторії.
+3. Викладання йде через Hub API (`.github/scripts/deploy_space.py`), а не `git push`: Hub
+   відхиляє git-пуші з бінарними файлами (графіки, parquet) без його сховища великих файлів.
 
 **Альтернатива: Render.** New -> Blueprint -> цей репозиторій, конфіг у `render.yaml`.
 Безкоштовний план засинає після 15 хв без трафіку (холодний старт з перенавчанням) і має
 512 МБ памʼяті, тому там вікно навчання зменшене до 6 місяців.
 
-Статична сторінка на GitHub Pages (`demo/make_site.py`, workflow `forecast.yml`) лишається як
-запасна вітрина без сервера: вона показує той самий прогноз, але оновлюється раз на годину
-і без деталей по областях.
+Основна вітрина без сервера: статична сторінка на GitHub Pages, яку кожні 10 хвилин
+збирає `pipeline.yml` (нижче).
 
 ## Тести
 
@@ -209,10 +229,18 @@ pytest tests/test_raion_leakage.py   # витік у районних ознак
 ## Static site on GitHub Pages
 
 `python scripts/build_static_site.py site` runs the engine once and writes the UI
-plus precomputed `api/*.json` (state, forecast, regions, raions, metrics, verification,
-threats) that replace the `/api/*` calls. With `AIRRAID_STORE=<live-data checkout>` the
-raion layer also uses the alerts.in.ua history of the store; with `ALERTS_IN_UA_TOKEN` it
-shows the live raion state. The threat-type layer is hidden when
-`threat-type/reports/type_forecast_now.csv` is missing. The `pages.yml` workflow
-rebuilds and deploys it every 3 hours; enable it once in Settings -> Pages ->
-Source: GitHub Actions.
+plus precomputed `api/*.json` (state, forecast, regions, raions, metrics,
+verification, threats, status) that replace the `/api/*` calls. The threat-type layer
+is hidden when `threat-type/reports/type_forecast_now.csv` is missing.
+
+In the 10-minute pipeline (`.github/workflows/pipeline.yml`, README "Automation")
+it runs in store mode (`AIRRAID_STORE=live-data`, `AIRRAID_MODEL_DIR=var/models`):
+no training and no second forecast. It serves the bundle `predict_now.py` used
+(with the raion models in `<models>/raions` and the text models in `<models>/text`,
+`AIRRAID_RAION_TRAIN=0`, `AIRRAID_TEXT_TRAIN=0`), the forecast `predict_now.py`
+logged to the store for the newest origin, the live state of the newest poll (the
+map's "now" is the forecast's `active_now`; the raion state comes from the same poll),
+the raion history of the store, and the verification `verify.py` wrote to the store;
+`scripts/pipeline.py status` adds `api/status.json` (last update, step timings, data
+ends, model training time, served model, raion method, verification counts). Enable
+Pages once in Settings -> Pages -> Source: GitHub Actions.
