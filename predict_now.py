@@ -29,6 +29,12 @@ never change anything before the end of the dataset.
 Every forecast is appended to reports/forecast_log.csv and, with --store, to the
 point-in-time store (`forecasts`) so verify.py can score it.
 
+Learning from verified forecasts (airraid.recalibration): with --store, the
+newest recalibration map known at the origin (fitted by verify.py from forecasts
+verified before it) is applied to the oblast probabilities where its guard
+passed. `p` is the served probability, `p_raw` the model's own, `calibration`
+says which ("platt" or "none"); verify.py scores both.
+
 With --text-root (a text-data checkout) the history + Telegram model
 (airraid.text.serving, boosters in <models>/text) serves where it beat the
 history-only model and the archive covers the origin; each row says which model
@@ -48,7 +54,7 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
-from airraid import nowcast, store, training  # noqa: E402
+from airraid import nowcast, recalibration, store, training  # noqa: E402
 from airraid.data import download, load_alerts  # noqa: E402
 from airraid.live_alerts import OBLAST_EN as UK_TO_EN  # noqa: E402,F401  (old import name)
 from airraid.live_alerts import KEY, LIVE_EXPIRY_HOURS, fetch_active, parse_active, store_records, to_frame  # noqa: E402
@@ -211,6 +217,13 @@ def forecast(alerts: pd.DataFrame, now: pd.Timestamp, store_root: Path | None = 
         text, text_rows, text_status = text_model(text_root, None if as_of else model_dir, alerts, hist_end, grid,
                                                   threads, as_of, text_fetch, reports_dir)
     log = nowcast.predict(models, grid, text, text_rows)
+    # learning from verified forecasts: the newest recalibration map known at the origin (verify.py
+    # fitted it from forecasts verified before then); `p_raw` keeps the model's own probability
+    cal = recalibration.latest(store_root, origin) if store_root is not None else None
+    log = recalibration.apply(log, cal)
+    n_cal = int(cal["active"].astype(bool).sum()) if cal is not None else 0
+    if n_cal:
+        print(f"recalibration fitted {cal['fitted_at'].max()}: applied to {n_cal} of 8 target x horizon")
     served = sorted(set(log["model"]))
     issued_at = pd.Timestamp.now(tz="UTC").floor("s")
     log = log.assign(issued_at=issued_at, live=bool(token) or len(gap) > 0 or seen is not None,
@@ -231,6 +244,8 @@ def forecast(alerts: pd.DataFrame, now: pd.Timestamp, store_root: Path | None = 
         "live_api": bool(token),
         "model_served": ",".join(served),
         "text_status": text_status,
+        "calibration_active": n_cal,
+        "calibration_fitted_at_utc": None if cal is None else f"{cal['fitted_at'].max():%Y-%m-%d %H:%M}",
     }
 
 

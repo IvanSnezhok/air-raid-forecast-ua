@@ -380,3 +380,34 @@ html[lang="en"] [data-lang="uk"], html[lang="uk"] [data-lang="en"] { display: no
 .probs th.h { white-space: nowrap; }
 .chart-legend i.fc { outline: 1px dashed var(--ink); outline-offset: -1px; }
 .explain .nw { white-space: nowrap; }
+
+/* history tab: issued forecasts vs what happened (renderHistory in app.js) */
+#history .card-h h2 { display: flex; align-items: center; gap: 6px; }
+#history > .card-h { margin-bottom: 10px; }
+#history > .card-h h2, #metrics > .card-h h2 { font-size: 22px; }
+.hctl { margin-bottom: 12px; }
+.hctl .zsel { display: inline-flex; align-items: center; gap: 8px; }
+.hctl2 { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.hsub { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink2); margin: 16px 0 6px; font-weight: 600; }
+.hrecent td.yes { color: var(--alert); font-weight: 600; }
+.hrecent .cell { display: inline-block; min-width: 44px; padding: 1px 6px; border-radius: 6px; text-align: center; }
+.chart-legend i.dash { width: 16px; height: 0; border-radius: 0; border-top: 2px dashed; vertical-align: 3px; }
+.chart-legend i.pend { background: repeating-linear-gradient(45deg, var(--surface2) 0 3px, var(--line) 3px 5px); border: 1px solid var(--line); }
+#history details.more .mt { margin-top: 6px; }
+#history details.more .mt th[colspan] { text-align: center; color: var(--ink); }
+.hrecent { max-width: 760px; }
+.tabs a { white-space: nowrap; }
+@media (max-width: 600px) {
+  /* four tabs: the tabs get the full width, the language switch moves up next to the title */
+  .top { position: relative; }
+  .topnav .seg.lang { position: absolute; top: 8px; right: 16px; }
+  .tabs { gap: 2px; width: 100%; }
+  .tabs a { padding: 6px 8px; font-size: 13.5px; }
+  .hrecent .c-obl, .hrecent .c-what { display: none; }  /* the oblast and type picked above */
+  .tabs { overflow-x: auto; scrollbar-width: none; }
+  .hctl .zsel, .hctl2 { width: 100%; }
+  .hctl .zsel select, .hctl2 .zsel { flex: 1; min-width: 0; }
+  .hctl2 .zsel select { width: 100%; }
+  #history > .card-h h2, #metrics > .card-h h2 { font-size: 19px; }
+}
+@media (max-width: 380px) { .tabs a { padding: 6px 5px; font-size: 13px; } }

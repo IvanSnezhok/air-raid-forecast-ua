@@ -2,7 +2,7 @@
 //   node ui_i18n_check.js <site-url>      (NODE_PATH must resolve "playwright")
 // Prints one JSON line: the language the page starts in (the browser asks for Ukrainian, English must
 // still be the default), visible lines with Cyrillic per view in English mode, the language switch and
-// whether it is remembered, the ?lang= override, horizontal overflow on a phone and console errors.
+// whether it is remembered, the ?lang= override, horizontal overflow on a phone, the History tab and console errors.
 const { chromium } = require("playwright");
 
 const base = process.argv[2].replace(/\/$/, "");
@@ -67,12 +67,33 @@ const CYR = /[Ѐ-ӿ]/;
   await page.goto(`${base}/#metrics`, { waitUntil: "networkidle" });
   await page.waitForSelector("#metrics h2");
   await check("metrics");
+  const metricsText = await page.evaluate(() => document.querySelector("#metrics").innerText);
+  // the History tab: loaded when it opens; headline tiles, charts, the latest checked forecasts
+  const history = {};
+  const readHistory = () => page.evaluate(() => ({
+    title: document.querySelector("#history h2")?.firstChild?.textContent.trim() || "",
+    tiles: document.querySelectorAll("#history .summary .stat").length,
+    charts: document.querySelectorAll("#history svg.chart").length,
+    recentRows: document.querySelectorAll("#h-recent tbody tr").length,
+    navCurrent: document.querySelector('.tabs a[aria-current="page"]')?.innerText || "",
+  }));
+  await page.goto(`${base}/#history`, { waitUntil: "networkidle" });
+  await page.waitForSelector("#history svg.chart");
+  await check("history");
+  history.en = await readHistory();
+  await page.selectOption("#h-key", "onset_h3");
+  await page.waitForSelector("#history svg.chart");
+  await page.click("#h-range button[data-v='168']");
+  await check("history-onset");
   await page.goto(`${base}/#about`, { waitUntil: "networkidle" });
   await check("about");
 
   await page.click("#lang button[data-setlang=uk]");
   const ukLang = await page.evaluate(() => document.documentElement.lang);
   const ukText = CYR.test(await page.evaluate(() => document.body.innerText));
+  await page.goto(`${base}/#history`, { waitUntil: "networkidle" });
+  await page.waitForSelector("#history svg.chart");
+  history.uk = await readHistory();
   await page.goto(`${base}/#map`, { waitUntil: "networkidle" });
   await page.waitForSelector("#rank tbody tr");
   const remembered = await page.evaluate(() => document.documentElement.lang);
@@ -89,7 +110,12 @@ const CYR = /[Ѐ-ӿ]/;
   await mp.waitForSelector("#stats .chartbox");
   await mp.waitForTimeout(500);
   const overflow = await mp.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  await mp.goto(`${base}/#history`, { waitUntil: "networkidle" });
+  await mp.waitForSelector("#history svg.chart");
+  await mp.waitForTimeout(300);
+  history.phoneOverflow = await mp.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  history.phoneCharts = await mp.evaluate(() => document.querySelectorAll("#history svg.chart").length);
 
-  console.log(JSON.stringify({ lang0, cyrillic, raionRows, info, ukLang, ukText, remembered, ukMapText, override, overflow, errors }));
+  console.log(JSON.stringify({ lang0, cyrillic, raionRows, info, ukLang, ukText, remembered, ukMapText, override, overflow, history, metricsText, errors }));
   await browser.close();
 })().catch((e) => { console.log(JSON.stringify({ fatal: String(e && e.stack || e) })); process.exit(1); });

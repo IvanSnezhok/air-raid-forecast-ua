@@ -168,6 +168,7 @@ function setLang(lang) {
   render();
   renderPanel();
   if (S.view === "metrics") renderMetrics();
+  if (S.view === "history") renderHistory();
 }
 
 // ---------------------------------------------------------------- data access
@@ -1089,14 +1090,14 @@ function setupChartTips() {
   };
   const move = (ev) => {
     const tg = ev.target.closest?.("[data-tip]");
-    if (!tg || !ev.target.closest("#stats, #chart-dialog")) { tip.hidden = true; return; }
+    if (!tg || !ev.target.closest("#stats, #chart-dialog, #history")) { tip.hidden = true; return; }
     show(tg, ev.clientX, ev.clientY);
   };
   document.addEventListener("pointermove", move);
   document.addEventListener("pointerdown", move);
   document.addEventListener("focusin", (ev) => {
     const tg = ev.target.closest?.("[data-tip]");
-    if (!tg || !ev.target.closest("#stats, #chart-dialog")) { tip.hidden = true; return; }
+    if (!tg || !ev.target.closest("#stats, #chart-dialog, #history")) { tip.hidden = true; return; }
     const r = tg.getBoundingClientRect();
     show(tg, r.left + r.width / 2, r.top);
   });
@@ -1377,40 +1378,23 @@ async function renderMetrics() {
   const plans = same && planList.length
     ? t("m.planSame", { months: planList[0][1].months, trees: planList[0][1].trees })
     : planList.map(([k, p]) => t("m.plan", { what: k.startsWith("active") ? t("m.planActive", { h: k.replace("active_h", "") }) : t("m.planOnset", { h: k.replace("onset_h", "") }), months: p.months, trees: p.trees })).join("; ");
-  let ver = null;
-  try { ver = await getJSON("/api/verification"); } catch (_) { /* optional */ }
-  let verHTML = "";
-  if (ver) {
-    const vs = ver.scores || [];
-    const v24 = ver.scores_24h || [];
-    const vtile = (tg, h, rows = vs) => {
-      const r = rows.find((x) => x.target === tg && x.horizon === h);
-      if (!r) return "";
-      return `<div class="stat"><div class="k">${targetName(tg, h)}</div>
-        <div class="v ${r.bss_vs_clim > 0 ? "pos" : "neg"}">${signedPct(r.bss_vs_clim)}</div>
-        <div class="s">${t("m.vSub", { n: r.n, runs: r.n_origins ?? "?", brier: num(r.brier, 3), clim: num(r.brier_clim, 3) })}${r.hit_rate_high != null ? ` · ${t("m.vHigh", { p: pct(r.hit_rate_high) })}` : ""}${r.event_rate_low != null ? t("m.vLow", { p: pct(r.event_rate_low) }) : ""}</div></div>`;
-    };
-    verHTML = `<div class="card"><div class="card-h"><h2>${t("m.verTitle")}</h2>
-        <span class="small muted">${ver.journal_since ? t("m.journalSince", { time: fmtFull.format(new Date(ver.journal_since)) }) : ""}</span></div>
-      <p class="small muted">${t("m.verNote")}</p>
-      ${vs.length ? `<h3>${t("m.last24")}</h3><div class="summary">${vtile("active", 1, v24)}${vtile("onset", 1, v24)}${vtile("onset", 3, v24)}</div>
-        <h3>${t("m.last7")}</h3><div class="summary">${vtile("active", 1)}${vtile("onset", 1)}${vtile("onset", 3)}${vtile("onset", 6)}</div>
-        <p class="small muted">${t("m.verCounts", { n: ver.n_forecasts_verified ?? "–", runs: ver.n_verified, wait: Math.max(0, (ver.n_issued || 0) - (ver.n_verified || 0)) })}</p>`
-        : `<p>${t("m.verNone", { n: ver.n_issued })}</p>`}</div>`;
-  }
-  let html = `<h2 style="margin-top:0">${t("m.title")}</h2><p class="lead">${t("m.pctNote")}</p>${verHTML}
+  // hold-out test only; the live check of issued forecasts is the History tab (renderHistory)
+  const range = ho.start ? `${fmtFull.format(new Date(ho.start))} – ${fmtFull.format(new Date(ho.end))}` : "";
+  let html = `<div class="card-h"><h2 style="margin:0">${t("m.title")} ${infoBtn("ex-m-pct")}</h2>
+      <a class="small" href="#history">${t("m.toHistory")}</a></div>
+    ${explainBox("ex-m-pct", t("m.pctNote"))}
     ${ho.start ? "" : `<p class="small muted">${t("m.noHoldout")}</p>`}
-    <h3 style="margin:24px 0 8px">${t("m.hoTitle")}</h3>
-    <p class="lead">${t("m.hoLead", { days: ho.days, from: fmtFull.format(new Date(ho.start)), to: fmtFull.format(new Date(ho.end)) })}</p>
+    <p class="pnote">${t("m.hoLine", { days: ho.days, range })} ${infoBtn("ex-m-ho")}</p>
+    ${explainBox("ex-m-ho", t("m.hoLead", { days: ho.days, from: ho.start ? fmtFull.format(new Date(ho.start)) : "–", to: ho.end ? fmtFull.format(new Date(ho.end)) : "–" }))}
     <div class="summary">${tile("active", 1)}${tile("onset", 1)}${tile("onset", 3)}${tile("onset", 6)}</div>
     ${table("active")}${table("onset")}`;
 
-  html += `<div class="two"><div class="card"><div class="card-h"><h2>${t("m.bssTitle")}</h2></div><div id="ch-bss"></div>
-      <div class="chart-legend"><span><i style="background:${css("--alert")}"></i>${targetName("active")}</span><span><i style="background:${css("--accent")}"></i>${targetName("onset")}</span></div>
-      <p class="small muted">${t("m.bssNote")}</p></div>
-    <div class="card"><div class="card-h"><h2>${t("m.relTitle")}</h2></div><div id="ch-rel"></div>
-      <div class="chart-legend"><span><i style="background:${css("--alert")}"></i>${t("m.relActive")}</span><span><i style="background:${css("--accent")}"></i>${t("m.relOnset")}</span></div>
-      <p class="small muted">${t("m.relNote")}</p></div></div>`;
+  html += `<div class="two"><div class="card"><div class="card-h"><h2>${t("m.bssTitle")} ${infoBtn("ex-m-bss")}</h2></div>
+      ${explainBox("ex-m-bss", t("m.bssNote"))}<div id="ch-bss"></div>
+      <div class="chart-legend"><span><i style="background:${css("--alert")}"></i>${targetName("active")}</span><span><i style="background:${css("--accent")}"></i>${targetName("onset")}</span></div></div>
+    <div class="card"><div class="card-h"><h2>${t("m.relTitle")} ${infoBtn("ex-m-rel")}</h2></div>
+      ${explainBox("ex-m-rel", t("m.relNote"))}<div id="ch-rel"></div>
+      <div class="chart-legend"><span><i style="background:${css("--alert")}"></i>${t("m.relActive")}</span><span><i style="background:${css("--accent")}"></i>${t("m.relOnset")}</span></div></div></div>`;
 
   if (ho.by_region) {
     const rows = ho.by_region.filter((r) => r.target === "onset" && r.horizon === 3).sort((a, b) => (b.roc_auc ?? 0) - (a.roc_auc ?? 0));
@@ -1432,8 +1416,8 @@ async function renderMetrics() {
         }).join("")}</tr>`).join("")}</tbody></table>`;
     };
     const per = m.walk_forward.test ? `${fmtFull.format(new Date(m.walk_forward.test[0]))} – ${fmtFull.format(new Date(m.walk_forward.test[1]))}` : "";
-    html += `<div class="card"><div class="card-h"><h2>${t("m.wfTitle")}</h2><span class="small muted">${per}</span></div>
-      <p class="small muted">${t("m.wfNote")}</p>
+    html += `<div class="card"><div class="card-h"><h2>${t("m.wfTitle")} ${infoBtn("ex-m-wf")}</h2><span class="small muted">${per}</span></div>
+      ${explainBox("ex-m-wf", t("m.wfNote"))}
       <div class="tablewrap">${[...new Set(wf.map((r) => r.target))].map(block).join("")}</div></div>`;
   }
   html += `<p class="small muted">${t("m.trained", { time: ho.trained_at ? fmtFull.format(new Date(ho.trained_at)) : "–", how: ho.selection_source === "defaults" ? t("m.defaults") : t("m.selected"), plans: esc(plans) })}</p>`;
@@ -1455,6 +1439,301 @@ async function renderMetrics() {
     xs: [0, 0.2, 0.4, 0.6, 0.8, 1], yMin: 0, yMax: 1, diag: true,
     yFmt: (v) => `${Math.round(v * 100)}%`, xFmt: (v) => `${Math.round(v * 100)}%`, xLabel: t("m.relX"), yLabel: t("m.relY"),
   }));
+}
+
+// ---------------------------------------------------------------- history view: issued forecasts vs what happened
+// /api/history (scores, skill over time, reliability, the learning layer) and /api/history/timeline
+// (per oblast, the forecast issued each hour and the outcome) are loaded only when the tab opens.
+const explainBox = (id, html) => `<div class="explain" id="${id}"${OPEN.has(id) ? "" : " hidden"}><p>${html}</p></div>`;
+const HKEYS = ["active_h1", "active_h2", "active_h3", "active_h6", "onset_h1", "onset_h2", "onset_h3", "onset_h6"];
+const HV = { data: null, tl: null, key: "active_h1", region: null, hours: 72, loading: null, anyCal: false };
+const hkName = (k) => { const [tg, h] = k.split("_h"); return targetName(tg, Number(h)); };
+const hkSplit = (k) => { const [tg, h] = k.split("_h"); return [tg, Number(h)]; };
+
+async function loadHistory() {
+  if (HV.data) return true;
+  if (!HV.loading) {
+    HV.loading = Promise.all([getJSON("/api/history"), getJSON("/api/history/timeline").catch(() => null)])
+      .then(([d, tl]) => { HV.data = d; HV.tl = tl; return true; })
+      .catch(() => false)
+      .finally(() => { HV.loading = null; });
+  }
+  return HV.loading;
+}
+
+function historyRow(win, k) {
+  const [tg, h] = hkSplit(k);
+  return (HV.data?.windows?.[win] || []).find((r) => r.target === tg && r.horizon === h) || null;
+}
+
+function learnTile(cal) {
+  const on = cal?.n_active || 0, total = cal?.n_total || 8;
+  const hours = Math.max(0, ...(cal?.groups || []).map((g) => g.n_hours || 0));
+  const need = (cal?.min_fit_hours || 24) + (cal?.check_hours || 24);
+  return `<div class="stat"><div class="k">${t("hi.learn")} ${infoBtn("ex-h-learn")}</div>
+    <div class="v">${on ? `${on}<small> / ${total}</small>` : `<small>${t("hi.learnOff")}</small>`}</div>
+    <div class="s">${on ? t("hi.learnOn", { n: on, total }) : t("hi.learnWait", { h: hours, need })}</div></div>`;
+}
+
+function skillTile(k) {
+  const d24 = historyRow("24h", k), d7 = historyRow("7d", k);
+  if (!d24 && !d7) return "";
+  const r = d24 || d7;
+  const v = r.bss_vs_clim;
+  return `<div class="stat"><div class="k">${hkName(k)}</div>
+    <div class="v ${v > 0 ? "pos" : "neg"}">${signedPct(v)}</div>
+    <div class="s">${t("hi.tileSub", { win: d24 ? t("hi.w24") : t("hi.w7"), d7: signedPct(d7?.bss_vs_clim), pers: signedPct(r.bss_vs_pers) })}</div></div>`;
+}
+
+async function renderHistory() {
+  const box = $("#history");
+  if (!HV.data) {
+    if (!box.innerHTML) box.innerHTML = `<p class="muted">${t("hi.loading")}</p>`;
+    const ok = await loadHistory();
+    if (!ok || !HV.data) { box.innerHTML = `<p class="muted">${t("hi.unavailable")}</p>`; return; }
+  }
+  const d = HV.data;
+  const regions = HV.tl?.regions || [];
+  if (!HV.region || !regions.includes(HV.region)) {
+    const sel = S.forecast?.regions?.find((r) => r.id === S.selected)?.name;
+    HV.region = regions.includes(sel) ? sel : (regions.includes("Kyiv City") ? "Kyiv City" : regions[0] || null);
+  }
+  const known = d.known_until ? fmtFull.format(new Date(d.known_until)) : "–";
+  const head = `<div class="card-h"><h2 style="margin:0">${t("hi.title")} ${infoBtn("ex-h-what")}</h2>
+      <span class="small muted">${t("hi.sub", { time: known })}</span></div>
+    ${explainBox("ex-h-what", t("hi.what"))}`;
+  if (!d.n_verified) {
+    box.innerHTML = `${head}<p>${t("hi.none", { n: d.n_runs || 0 })}</p><div class="summary">${learnTile(d.calibration)}</div>${explainBox("ex-h-learn", t("hi.learnWhat"))}`;
+    return;
+  }
+  if (!d.blocks?.series?.[HV.key]) HV.key = HKEYS.find((k) => d.blocks?.series?.[k]) || HV.key;
+  const opts = HKEYS.filter((k) => d.blocks?.series?.[k] || HV.tl?.series?.[k])
+    .map((k) => `<option value="${k}"${k === HV.key ? " selected" : ""}>${esc(hkName(k))}</option>`).join("");
+  const regOpts = regions.slice().sort((a, b) => oblShort(a).localeCompare(oblShort(b), LANG))
+    .map((r) => `<option value="${esc(r)}"${r === HV.region ? " selected" : ""}>${esc(oblShort(r))}</option>`).join("");
+  const anyCal = Object.values(d.blocks?.series || {}).some((s) => s.brier.some((v, i) => v != null && s.brier_raw[i] != null && Math.abs(v - s.brier_raw[i]) > 1e-6));
+  HV.anyCal = anyCal;
+  box.innerHTML = `${head}
+    <div class="summary hsum">
+      <div class="stat"><div class="k">${t("hi.checked")}</div><div class="v">${d.n_verified.toLocaleString(LANG === "uk" ? "uk-UA" : "en-GB")}</div>
+        <div class="s">${t("hi.checkedSub", { runs: d.n_runs_verified, wait: d.n_pending.toLocaleString(LANG === "uk" ? "uk-UA" : "en-GB") })}</div></div>
+      ${skillTile("active_h1")}${skillTile("onset_h3")}${learnTile(d.calibration)}
+    </div>
+    ${explainBox("ex-h-learn", t("hi.learnWhat"))}
+    <div class="controls hctl">
+      <label class="zsel"><span class="small muted">${t("hi.type")}</span> <select id="h-key">${opts}</select></label>
+    </div>
+    <div class="two">
+      <div class="card"><div class="card-h"><h2>${t("hi.skill")} ${infoBtn("ex-h-skill")}</h2></div>
+        ${explainBox("ex-h-skill", t("hi.skillWhat"))}
+        <div class="chart-host" data-hchart="skill"></div>
+        <div class="chart-legend"><span><i style="background:${css("--accent")}"></i>${t("hi.served")}</span>${anyCal ? `<span><i class="dash" style="border-color:${css("--ink2")}"></i>${t("hi.raw")}</span>` : ""}<span><i style="background:${css("--ink3")}"></i>${t("hi.pers")}</span></div></div>
+      <div class="card"><div class="card-h"><h2>${t("hi.rel")} ${infoBtn("ex-h-rel")}</h2><span class="small muted">${t("hi.w7")}</span></div>
+        ${explainBox("ex-h-rel", t("hi.relWhat"))}
+        <div class="chart-host" data-hchart="rel"></div>
+        <div class="chart-legend"><span><i style="background:${css("--accent")}"></i>${t("hi.served")}</span>${d.reliability?.[HV.key]?.raw ? `<span><i class="dash" style="border-color:${css("--ink2")}"></i>${t("hi.raw")}</span>` : ""}</div></div>
+    </div>
+    <div class="card">
+      <div class="card-h"><h2>${t("hi.tl")} ${infoBtn("ex-h-tl")}</h2>
+        <div class="hctl2">
+          <label class="zsel"><span class="sr">${t("hi.oblast")}</span><select id="h-region">${regOpts}</select></label>
+          <div class="seg" role="group" aria-label="${esc(t("hi.range"))}" id="h-range">
+            <button type="button" data-v="72" aria-pressed="${HV.hours === 72}">${t("hi.h72")}</button>
+            <button type="button" data-v="168" aria-pressed="${HV.hours === 168}">${t("hi.d7")}</button></div>
+        </div></div>
+      ${explainBox("ex-h-tl", t("hi.tlWhat"))}
+      <div class="chart-host" data-hchart="tl"></div>
+      <div class="chart-legend"><span><i style="background:${rampColor(0.6)}"></i>${t("hi.tlP")}</span><span><i style="background:${css("--alert-soft")};border:1px solid ${css("--alert")}"></i>${t("stats.stripYes")}</span><span><i class="pend"></i>${t("stats.stripUnknown")}</span></div>
+      <h3 class="hsub">${t("hi.recent")}</h3>
+      <div class="tablewrap" id="h-recent"></div>
+    </div>
+    <details class="more"><summary>${t("hi.all")}</summary>${historyTables(d)}</details>`;
+  $("#h-key").addEventListener("change", (ev) => { HV.key = ev.target.value; renderHistory(); });
+  $("#h-region").addEventListener("change", (ev) => { HV.region = ev.target.value; drawHistory(true); renderRecent(); });
+  for (const b of document.querySelectorAll("#h-range button")) {
+    b.addEventListener("click", () => {
+      HV.hours = Number(b.dataset.v);
+      for (const x of document.querySelectorAll("#h-range button")) x.setAttribute("aria-pressed", String(x === b));
+      drawHistory(true);
+    });
+  }
+  drawHistory(true);
+  renderRecent();
+}
+
+function historyTables(d) {
+  const keys = HKEYS.filter((k) => historyRow("7d", k) || historyRow("24h", k));
+  const f = (v) => num(v, 3);
+  const rows = keys.map((k) => {
+    const a = historyRow("24h", k), b = historyRow("7d", k);
+    const cell = (r) => (r ? `<td>${r.n}</td><td>${f(r.brier)}</td>${HV.anyCal ? `<td>${f(r.brier_raw)}</td>` : ""}<td>${f(r.brier_clim)}</td><td>${f(r.brier_pers)}</td>` : `<td colspan="${HV.anyCal ? 5 : 4}">–</td>`);
+    return `<tr><td>${esc(hkName(k))}</td>${cell(a)}${cell(b)}</tr>`;
+  }).join("");
+  const sub = `<th>n</th><th>Brier</th>${HV.anyCal ? `<th>${t("hi.colRaw")}</th>` : ""}<th>${t("hi.colClim")}</th><th>${t("hi.colPers")}</th>`;
+  const span = HV.anyCal ? 5 : 4;
+  const scores = `<div class="tablewrap"><table class="mt"><thead><tr><th></th><th colspan="${span}">${t("hi.w24")}</th><th colspan="${span}">${t("hi.w7")}</th></tr>
+    <tr><th></th>${sub}${sub}</tr></thead><tbody>${rows}</tbody></table></div>`;
+  const cal = d.calibration || {};
+  const groups = cal.groups || [];
+  const calRows = groups.map((g) => `<tr><td>${esc(targetName(g.target, g.horizon))}</td>
+    <td class="${g.active ? "pos" : ""}">${t(`hi.state.${g.reason || "collecting"}`)}</td><td>${g.n_hours ?? "–"}</td>
+    <td>${f(g.brier_raw)}</td><td>${f(g.brier_cal)}</td><td>${g.gain == null ? "–" : signedPct(g.gain)}</td></tr>`).join("");
+  const calTable = groups.length ? `<h3 class="hsub">${t("hi.calTitle")}</h3>
+    <div class="tablewrap"><table class="mt"><thead><tr><th></th><th>${t("hi.colState")}</th><th>${t("hi.colHours")}</th><th>${t("hi.colBrierRaw")}</th><th>${t("hi.colBrierCal")}</th><th>${t("hi.colGain")}</th></tr></thead>
+    <tbody>${calRows}</tbody></table></div>
+    <p class="small muted">${t("hi.calFitted", { time: cal.fitted_at ? fmtFull.format(new Date(cal.fitted_at)) : "–" })}</p>` : "";
+  const src = Object.entries(d.label_sources || {}).map(([k, n]) => `${t(`hi.src.${k === "dataset" ? "dataset" : "store"}`)}: ${n.toLocaleString()}`).join(" · ");
+  return `${scores}${calTable}<p class="small muted">${t("hi.labels", { list: src || "–" })}</p>`;
+}
+
+// the charts are drawn at the pixel width of their box (redrawn on resize)
+function drawHistory(force = false) {
+  if (!HV.data || S.view !== "history") return;
+  for (const host of document.querySelectorAll("#history .chart-host[data-hchart]")) {
+    const w = Math.floor(host.clientWidth);
+    const sig = `${w}|${HV.key}|${HV.region}|${HV.hours}`;
+    if (!w || (!force && host.dataset.sig === sig)) continue;
+    host.dataset.sig = sig;
+    host.innerHTML = "";
+    if (host.dataset.hchart === "skill") skillChart(host, HV.data.blocks, HV.key, { w });
+    else if (host.dataset.hchart === "rel") relChart(host, { w });
+    else timelineChart(host, { w });
+  }
+}
+
+function renderRecent() {
+  const box = $("#h-recent");
+  if (!box) return;
+  const tl = HV.tl, s = tl?.series?.[HV.key];
+  const i = tl?.regions?.indexOf(HV.region) ?? -1;
+  if (!s || i < 0) { box.innerHTML = ""; return; }
+  const [tg, h] = hkSplit(HV.key);
+  const start = new Date(tl.start).getTime();
+  const rows = [];
+  for (let k = tl.n_hours - 1; k >= 0 && rows.length < 10; k--) {
+    const y = s.y[i][k], p = s.p[i][k];
+    if (y == null || p == null) continue;
+    const o = new Date(start + k * 3600e3 + (s.minute[k] || 0) * 60e3);
+    rows.push(`<tr><td>${fmtFull.format(o)}</td><td class="c-obl">${esc(oblShort(HV.region))}</td><td class="c-what">${esc(targetName(tg, h))}</td>
+      <td>${probCell(p)}</td><td class="${y ? "yes" : ""}">${y ? t("hi.yes") : t("hi.no")}</td></tr>`);
+  }
+  box.innerHTML = rows.length ? `<table class="mt hrecent"><thead><tr><th>${t("hi.colTime")}</th><th class="c-obl">${t("rank.oblast")}</th><th class="c-what">${t("hi.colWhat")}</th><th>${t("hi.colP")}</th><th>${t("hi.colY")}</th></tr></thead>
+    <tbody>${rows.join("")}</tbody></table>` : `<p class="small muted">${t("stats.stripWait")}</p>`;
+}
+
+function relChart(host, { w }) {
+  const rel = HV.data?.reliability?.[HV.key] || {};
+  const series = [["served", css("--accent"), ""], ["raw", css("--ink2"), "5 4"]]
+    .filter(([k]) => rel[k]?.length).map(([k, color, dash]) => ({ color, dash, points: rel[k].map((r) => [r[0], r[1]]) }));
+  host.appendChild(lineChart(series, {
+    W: w, Hh: Math.round(Math.min(260, Math.max(200, w * 0.5))), xs: [0, 0.2, 0.4, 0.6, 0.8, 1], yMin: 0, yMax: 1, diag: true,
+    yFmt: (v) => `${Math.round(v * 100)}%`, xFmt: (v) => `${Math.round(v * 100)}%`, xLabel: t("m.relX"), yLabel: t("m.relY"),
+  }));
+}
+
+function skillChart(host, blocks, key, { w, h }) {
+  const s = blocks?.series?.[key];
+  if (!s) return;
+  const n = blocks.start.length;
+  const sk = (arr) => arr.map((b, i) => (b == null || !s.brier_clim[i] ? null : 1 - b / s.brier_clim[i]));
+  const served = sk(s.brier), raw = sk(s.brier_raw), pers = sk(s.brier_pers);
+  const all = [...served, ...(HV.anyCal ? raw : []), ...pers].filter((v) => v != null);
+  const lo = Math.max(-1, Math.min(-0.2, Math.floor(Math.min(...all) * 5) / 5));
+  const hi = Math.min(1, Math.max(0.2, Math.ceil(Math.max(...all) * 5) / 5));
+  h = h || (w < 500 ? 190 : 220);
+  const pad = { l: 44, r: 10, t: 10, b: 30 };
+  const svg = el("svg", { viewBox: `0 0 ${w} ${h}`, width: w, height: h, class: "chart", role: "img", "aria-label": t("hi.skill") }, host);
+  const y = (v) => pad.t + (hi - v) / (hi - lo) * (h - pad.t - pad.b);
+  const bw = (w - pad.l - pad.r) / Math.max(1, n);
+  const x = (i) => pad.l + (i + 0.5) * bw;
+  const step = (hi - lo) / 0.2 > 6 ? 0.5 : 0.2;
+  for (let v = Math.ceil(lo / step - 1e-9) * step; v <= hi + 1e-9; v += step) {
+    el("line", { x1: pad.l, x2: w - pad.r, y1: y(v), y2: y(v), class: "ax", "stroke-dasharray": Math.abs(v) < 1e-9 ? "" : "3 4" }, svg);
+    const tx = el("text", { x: pad.l - 6, y: y(v), "text-anchor": "end", "dominant-baseline": "middle" }, svg);
+    tx.textContent = `${v > 1e-9 ? "+" : ""}${Math.round(v * 100)}%`;
+  }
+  el("line", { x1: pad.l, x2: w - pad.r, y1: y(0), y2: y(0), stroke: css("--ink3") }, svg);
+  const line = (vals, color, dash, width, dots) => {
+    let seg = [];
+    const flush = () => { if (seg.length > 1) el("polyline", { points: seg.join(" "), fill: "none", stroke: color, "stroke-width": width, "stroke-dasharray": dash, "stroke-linejoin": "round" }, svg); seg = []; };
+    vals.forEach((v, i) => { if (v == null) flush(); else seg.push(`${x(i).toFixed(1)},${y(v).toFixed(1)}`); });
+    flush();
+    if (dots) vals.forEach((v, i) => { if (v != null) el("circle", { cx: x(i), cy: y(v), r: n > 20 ? 2.5 : 3.5, fill: color }, svg); });
+  };
+  line(pers, css("--ink3"), "", 1.4, false);
+  if (HV.anyCal) line(raw, css("--ink2"), "5 4", 1.6, false);
+  line(served, css("--accent"), "", 2.2, true);
+  // x axis: Kyiv dates at the first block of each day
+  let last = "";
+  blocks.start.forEach((iso, i) => {
+    const d = new Date(iso), day = fmtDay.format(d);
+    if (day !== last) {
+      last = day;
+      if (kyivHour(d) < 6 || i === 0) {
+        el("line", { x1: pad.l + i * bw, x2: pad.l + i * bw, y1: h - pad.b, y2: h - pad.b + 5, class: "ax" }, svg);
+        if (bw * 4 >= 44 || i % 8 === 0) { const tx = el("text", { x: pad.l + i * bw + 2, y: h - 9, class: "strong" }, svg); tx.textContent = day; }
+      }
+    }
+  });
+  const g = el("g", { class: "hits" }, svg);
+  blocks.start.forEach((iso, i) => {
+    if (s.n[i] == null) return;
+    const a = new Date(iso), b = new Date(a.getTime() + (blocks.hours || 6) * 3600e3);
+    const tip = t("hi.skillTip", { from: fmtFull.format(a), to: fmtTime.format(b), n: s.n[i], v: signedPct(served[i]) })
+      + (HV.anyCal ? ` · ${t("hi.raw")} ${signedPct(raw[i])}` : "") + (pers[i] != null ? ` · ${t("hi.pers")} ${signedPct(pers[i])}` : "");
+    el("rect", { x: pad.l + i * bw, y: pad.t, width: bw, height: h - pad.t - pad.b, "data-tip": tip }, g);
+  });
+}
+
+function timelineChart(host, { w, h }) {
+  const tl = HV.tl, s = tl?.series?.[HV.key];
+  const ri = tl?.regions?.indexOf(HV.region) ?? -1;
+  if (!s || ri < 0) { host.innerHTML = `<p class="small muted">${t("stats.stripWait")}</p>`; return; }
+  const [tg, hz] = hkSplit(HV.key);
+  const n0 = Math.max(0, tl.n_hours - HV.hours);
+  const P = s.p[ri].slice(n0), Y = s.y[ri].slice(n0), M = s.minute.slice(n0);
+  const n = P.length;
+  const start = new Date(tl.start).getTime() + n0 * 3600e3;
+  h = h || (w < 500 ? 180 : 210);
+  const pad = { l: 44, r: 8, t: 10, b: 30 };
+  const f = frame(host, w, h, pad, false);
+  f.svg.setAttribute("aria-label", t("hi.tl"));
+  const bw = (w - pad.l - pad.r) / Math.max(1, n);
+  for (let i = 0; i < n; i++) {
+    if (P[i] == null) continue;
+    if (Y[i] === 1) el("rect", { x: pad.l + i * bw, y: f.y(1), width: bw + 0.4, height: f.y(0) - f.y(1), fill: css("--alert-soft") }, f.svg);
+    else if (Y[i] == null) el("rect", { x: pad.l + i * bw, y: f.y(1), width: bw + 0.4, height: f.y(0) - f.y(1), fill: "url(#h-pend)" }, f.svg);
+  }
+  const defs = el("defs", {}, f.svg);
+  const pat = el("pattern", { id: "h-pend", width: 6, height: 6, patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)" }, defs);
+  el("rect", { width: 6, height: 6, fill: css("--surface2") }, pat);
+  el("line", { x1: 0, y1: 0, x2: 0, y2: 6, stroke: css("--line"), "stroke-width": 2 }, pat);
+  yAxis(f, w, pad);
+  for (let i = 0; i < n; i++) {
+    const p = P[i];
+    if (p == null) continue;
+    el("rect", { x: pad.l + i * bw + bw * 0.15, y: f.y(p), width: Math.max(1, bw * 0.7), height: Math.max(0.5, f.y(0) - f.y(p)),
+      fill: rampColor(Math.max(0.2, p)), rx: Math.min(2, bw / 4) }, f.svg);
+  }
+  for (let i = 0; i <= n; i++) {
+    const tm = new Date(start + i * 3600e3);
+    if (kyivHour(tm) === 0 && i < n) {
+      el("line", { x1: pad.l + i * bw, x2: pad.l + i * bw, y1: f.y(0), y2: f.y(0) + 6, class: "ax" }, f.svg);
+      if (bw * 24 > 46) { const tx = el("text", { x: pad.l + i * bw + 3, y: h - 9, class: "strong" }, f.svg); tx.textContent = fmtDay.format(tm); }
+    } else if (kyivHour(tm) % 6 === 0 && bw * 6 >= 30 && i < n - 1) {
+      const tx = el("text", { x: pad.l + i * bw, y: f.y(0) + 13, "text-anchor": "middle", class: "minor" }, f.svg);
+      tx.textContent = String(kyivHour(tm)).padStart(2, "0");
+    }
+  }
+  const g = el("g", { class: "hits" }, f.svg);
+  for (let i = 0; i < n; i++) {
+    if (P[i] == null) continue;
+    const o = new Date(start + i * 3600e3 + (M[i] || 0) * 60e3);
+    const a = new Date(o.getTime() + (tg === "active" ? hz - 1 : 0) * 3600e3), b = new Date(o.getTime() + hz * 3600e3);
+    const tip = t("hi.tlTip", { time: fmtFull.format(o), from: fmtTime.format(a), to: fmtTime.format(b), p: pct(P[i]),
+      y: Y[i] == null ? t("stats.stripUnknown") : Y[i] ? t("stats.stripYes") : t("stats.stripNo") });
+    el("rect", { x: pad.l + i * bw, y: pad.t, width: bw, height: f.y(0) - pad.t, "data-tip": tip }, g);
+  }
 }
 
 // ---------------------------------------------------------------- raions
@@ -1640,10 +1919,11 @@ function renderRaionRank() {
 function setView() {
   const h = location.hash.replace("#", "") || "map";
   const [view, arg] = h.split("/");
-  S.view = ["region", "raion", "stats"].includes(view) ? "map" : (["map", "metrics", "about"].includes(view) ? view : "map");
+  S.view = ["region", "raion", "stats"].includes(view) ? "map" : (["map", "history", "metrics", "about"].includes(view) ? view : "map");
   for (const a of document.querySelectorAll(".tabs a")) a.setAttribute("aria-current", a.dataset.view === S.view ? "page" : "false");
-  for (const v of ["map", "metrics", "about"]) $(`#view-${v}`).hidden = v !== S.view || (v !== "about" && !$("#loading").hidden);
+  for (const v of ["map", "history", "metrics", "about"]) $(`#view-${v}`).hidden = v !== S.view || (v !== "about" && !$("#loading").hidden);
   if (S.view === "metrics" && $("#loading").hidden) renderMetrics();
+  if (S.view === "history" && $("#loading").hidden) renderHistory();
   if (view === "region" && arg && S.forecast && (arg !== S.selected || S.rsel)) select(arg);
   if (view === "raion" && arg && arg !== S.rsel && S.raions) selectRaion(arg, { zoom: true });
   if (S.view === "map") requestAnimationFrame(drawCharts);
@@ -1696,7 +1976,7 @@ async function refresh() {
     if (e.status === 503) {
       $("#loading").hidden = false;
       $("#loading-msg").textContent = loadingText(e.body?.detail);
-      for (const v of ["map", "metrics"]) $(`#view-${v}`).hidden = true;
+      for (const v of ["map", "history", "metrics"]) $(`#view-${v}`).hidden = true;
       return false;
     }
     console.error(e);
@@ -1740,7 +2020,7 @@ async function main() {
   $("#chart-dialog").addEventListener("click", (ev) => { if (ev.target === ev.currentTarget) ev.currentTarget.close(); });
   $("#chart-dialog").addEventListener("close", () => { $("#ctip").hidden = true; });
   let rz = null;
-  new ResizeObserver(() => { clearTimeout(rz); rz = setTimeout(() => { drawCharts(); paintLabels(); }, 120); }).observe($("main"));
+  new ResizeObserver(() => { clearTimeout(rz); rz = setTimeout(() => { drawCharts(); paintLabels(); drawHistory(); }, 120); }).observe($("main"));
   $("#search").addEventListener("change", (ev) => {
     const q = normUk(ev.target.value);
     if (!q) return;
@@ -1766,7 +2046,10 @@ async function main() {
   setInterval(async () => {
     const prevOrigin = S.forecast?.origin;
     await refresh();
-    if (S.forecast?.origin !== prevOrigin) { S.metrics = null; if (S.view === "metrics") renderMetrics(); }
+    if (S.forecast?.origin !== prevOrigin) {
+      S.metrics = null; if (S.view === "metrics") renderMetrics();
+      HV.data = null; if (S.view === "history") renderHistory();
+    }
   }, 60000);
   getJSON("/api/metrics").then((m) => { S.metrics = m; if (S.panel?.kind === "region") renderPanel(); }).catch(() => {});
 }

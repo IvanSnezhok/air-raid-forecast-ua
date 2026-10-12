@@ -34,6 +34,7 @@ TIME_COL = {
     "history_pulls": "fetched_at",  # one row per history request (also when nothing was new)
     "forecasts": "issued_at",  # the forecast log
     "verification": "verified_at",  # scored forecasts
+    "calibration": "fitted_at",  # recalibration maps learned from verified forecasts (airraid.recalibration)
 }
 # Rows whose key is already stored are dropped on append (history pulls overlap by ~30 days).
 DEDUP_KEY = {

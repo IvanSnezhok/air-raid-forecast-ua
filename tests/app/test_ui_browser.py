@@ -1,6 +1,7 @@
 """The built static site in a real browser: English by default, no Ukrainian left in English mode,
 the EN / UK switch works and is remembered, ?lang= overrides it, no horizontal scroll on a phone,
-no console errors, and the forecast says what its percentages mean (the "?" explanation, keyboard included).
+no console errors, the forecast says what its percentages mean (the "?" explanation, keyboard included),
+and the History tab renders its charts in English and Ukrainian (also at 390 px).
 
 Needs Node.js with the `playwright` package (NODE_PATH from AIRRAID_UI_NODE_PATH or `npm root -g`)
 and a Chromium it can launch (AIRRAID_UI_CHANNEL=chrome uses the installed Google Chrome). Skipped
@@ -14,12 +15,17 @@ import shutil
 import subprocess
 import sys
 import threading
+from dataclasses import replace
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 import build_static_site  # noqa: E402
+from airraid.data import load_alerts  # noqa: E402
+from airraid_app.journal import ForecastJournal  # noqa: E402
 
 SCRIPT = Path(__file__).with_name("ui_i18n_check.js")
 
@@ -49,10 +55,24 @@ def node_env():
     return env
 
 
+def _past_forecasts(settings, state_dir: Path) -> None:
+    """Forecasts issued hourly over the last 3 days of the history, so the History tab has checked forecasts."""
+    alerts = load_alerts(settings.data_path)
+    end = alerts["start"].max().floor("h")
+    regions = sorted(alerts["region"].unique())
+    rng = np.random.default_rng(0)
+    rows = [{"origin": end - pd.Timedelta(hours=k), "region": r, "target": t, "horizon": h,
+             "p": float(rng.uniform(0.02, 0.9)), "clim": 0.2, "issued_at": end - pd.Timedelta(hours=k), "live": False}
+            for k in range(1, 73) for r in regions for t in ("active", "onset") for h in (1, 2, 3, 6)]
+    ForecastJournal(state_dir / "forecast_journal.parquet").record(pd.DataFrame(rows))
+
+
 @pytest.fixture(scope="module")
 def site_url(settings, tmp_path_factory):
     out = tmp_path_factory.mktemp("browser") / "site"
-    build_static_site.build(out, settings)
+    state = tmp_path_factory.mktemp("browser-state")
+    _past_forecasts(settings, state)
+    build_static_site.build(out, replace(settings, state_dir=state))
     handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(out))
     handler.log_message = lambda *a, **k: None
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -85,4 +105,12 @@ def test_ui_in_a_browser(node_env, site_url):
     assert res["remembered"] == "uk" and res["ukMapText"]  # the choice survives a reload
     assert res["override"] == "en"  # ?lang=en wins over the remembered choice
     assert res["overflow"] <= 0  # no horizontal scroll at 390 px
+    # the History tab: checked forecasts with charts, in English and in Ukrainian, also on a phone
+    hi = res["history"]
+    assert hi["en"]["title"] == "Forecast history" and hi["en"]["tiles"] >= 3 and hi["en"]["charts"] >= 3
+    assert hi["en"]["recentRows"] > 0 and hi["en"]["navCurrent"] == "History"
+    assert hi["uk"]["title"] == "Історія прогнозів" and hi["uk"]["charts"] >= 3 and hi["uk"]["navCurrent"] == "Історія"
+    assert hi["phoneOverflow"] <= 0 and hi["phoneCharts"] >= 3
+    # Model quality keeps the hold-out test only; the live check moved to History (linked)
+    assert "Check of the live forecasts" not in res["metricsText"] and "History →" in res["metricsText"]
     assert res["errors"] == []
