@@ -1,5 +1,6 @@
-# Train the served model set out of the 10-minute pipeline's hot path and publish
-# it through the Actions cache (key: models-v2-<hash of the modelling code and of
+# Train the served model set (oblast models with the holdout week, raion models, history
+# + Telegram models) out of the 10-minute pipeline's hot path and publish it through
+# the Actions cache (key: models-v2-<hash of the modelling code and of
 # reports/run_summary.json>-<data end>-<trained at>). The pipeline restores the
 # newest bundle with that prefix in every run, so the cache never goes 7 days
 # unused; caches saved on the default branch are visible to every branch.
@@ -38,28 +39,24 @@ jobs:
       - name: Model cache key
         id: key
         run: echo "prefix=$(python3 scripts/pipeline.py models-key)" >> "$GITHUB_OUTPUT"
-      # [hook: raion layer] official file (fixed cache key: it stopped updating) and the store
-      # history the raion models train on; both only once src/airraid/raions.py exists
-      - name: "[optional] Official raion-level file (cached)"
-        if: hashFiles('src/airraid/raion_data.py') != ''
+      # the raion models learn from the official file (cached under a fixed key: it stopped
+      # updating) and the store's raion history
+      - name: Official raion-level file (cached)
         uses: actions/cache@v4
         with:
           path: data/raw/official_data_en.csv
           key: official-data-en-v1
-      - name: "[optional] Store history for the raion models"
-        if: hashFiles('src/airraid/raions.py') != ''
+      - name: Store history for the raion models
         run: |
-          STORE=live-data STORE_DAYS=60 bash .github/scripts/live-data.sh checkout
+          STORE=live-data STORE_DAYS=60 OUTPUT_DAYS=0 bash .github/scripts/live-data.sh checkout
           echo "AIRRAID_STORE=live-data" >> "$GITHUB_ENV"
-      - name: Train (holdout week, then the final refit; raion models when present)
-        run: python scripts/train_models.py --out var/models --threads 4 $([ -f src/airraid/raions.py ] && echo --raions)
-      # [hook: text signals] the history + Telegram models, cached in the same bundle (<models>/text)
-      - name: "[optional] Text models"
-        if: hashFiles('src/airraid/text/serving.py') != ''
-        continue-on-error: true  # the history-only bundle is published regardless
+      - name: Oblast models (holdout week, then the final refit) and raion models
+        run: python scripts/train_models.py --out var/models --threads 4 --raions
+      - name: History + Telegram models
+        continue-on-error: true  # the bundle is published regardless; the pipeline then serves history-only
         run: |
           bash .github/scripts/text-data.sh checkout
-          PYTHONPATH=src python -m airraid.text.serving train --root text-data --model-dir var/models/text
+          PYTHONPATH=src python -m airraid.text.serving train --root text-data --model-dir var/models/text --threads 4
       - name: Model info
         id: minfo
         run: python3 scripts/pipeline.py models-info --models var/models

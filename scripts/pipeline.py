@@ -39,11 +39,12 @@ ROOT = Path(__file__).resolve().parents[1]
 API = "https://api.github.com"
 MODEL_FILES = ("src/airraid/data.py", "src/airraid/features.py", "src/airraid/models.py",
                "src/airraid/training.py", "reports/run_summary.json")
-# [hook: raion layer] hashed only when present: raion models live in the same cached bundle (<models>/raions)
-# [hook: text signals] likewise for the history + Telegram models (<models>/text)
+# The raion models (<models>/raions) and the history + Telegram models (<models>/text) are in
+# the same cached bundle, so their code and selections are part of its key (hashed when present).
 OPTIONAL_MODEL_FILES = ("src/airraid/raions.py", "src/airraid/raion_data.py", "src/airraid/raion_features.py",
                         "src/airraid_app/raion_engine.py", "reports/raions/summary.json",
-                        "src/airraid/text/features.py", "src/airraid/text/serving.py")
+                        "src/airraid/text/features.py", "src/airraid/text/serving.py",
+                        "reports/text_selection.json")
 STATUS_PATH = "_state/pipeline.json"  # in the live-data store
 SLOT_MIN, SLOT_OFFSET = 10, 3  # cron "3-59/10 * * * *": :03, :13, ... (off the busy top of the hour)
 
@@ -190,8 +191,23 @@ def _read_json(p: Path) -> dict:
         return {}
 
 
+def raion_summary(raions: dict) -> dict | None:
+    """Which raion method served (api/raions.json): where the models came from, the data
+    tier, and how many raion x target x horizon values each method produced."""
+    if not raions:
+        return None
+    counts: dict[str, int] = {}
+    for r in raions.get("raions", []):
+        for by_h in (r.get("method") or {}).values():
+            for m in by_h.values():
+                counts[str(m)] = counts.get(str(m), 0) + 1
+    return {"models_source": raions.get("models_source"), "tier": raions.get("tier"),
+            "n_raions": len(raions.get("raions", [])), "n_active": raions.get("n_active"),
+            "methods": dict(sorted(counts.items(), key=lambda kv: -kv[1]))}
+
+
 def build_status(now: datetime, timings: dict, forecast: dict, models: dict, verification: dict,
-                 threats: dict, env: dict) -> dict:
+                 threats: dict, env: dict, raions: dict | None = None) -> dict:
     steps = {s["name"]: s["seconds"] for s in timings.get("steps", [])}
     failed = [s["name"] for s in timings.get("steps", []) if not s.get("ok", True)]
     t0 = env.get("JOB_T0")
@@ -218,6 +234,7 @@ def build_status(now: datetime, timings: dict, forecast: dict, models: dict, ver
                   "holdout": models.get("holdout_start") is not None, "code_version": models.get("code_version"),
                   # [hook: text signals] which model served this run's rows, and why (predict_now meta)
                   "served": forecast.get("model_served"), "text_status": forecast.get("text_status")},
+        "raions": raion_summary(raions or {}),
         "threat_type_origin": utc(threats.get("origin_utc")),
         "verification": {"n_verified": verification.get("n_verified"), "pending": verification.get("pending"),
                          "by_label_source": verification.get("n_verified_by_label_source"),
@@ -235,7 +252,8 @@ def cmd_status(a) -> None:
     timings = _read_json(_timings_path())
     st = build_status(utcnow(), timings, _read_json(ROOT / "reports" / "forecast_meta.json"),
                       _read_json(Path(a.models) / "meta.json"), _read_json(ROOT / "reports" / "verification_summary.json"),
-                      _read_json(ROOT / "threat-type" / "reports" / "type_forecast_meta.json"), dict(os.environ))
+                      _read_json(ROOT / "threat-type" / "reports" / "type_forecast_meta.json"), dict(os.environ),
+                      _read_json(Path(a.site) / "api" / "raions.json") if a.site else None)
     text = json.dumps(st, indent=1)
     if a.site:
         (Path(a.site) / "api").mkdir(parents=True, exist_ok=True)
@@ -247,17 +265,23 @@ def cmd_status(a) -> None:
     if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
         rows = "\n".join(f"| {k} | {v:.1f} |" for k, v in st["steps_s"].items())
         with open(summary, "a") as f:
+            rz = st["raions"] or {}
             f.write(f"### Pipeline run\n\nForecast origin {st['origin']} (last poll {st['last_poll']}), "
-                    f"models trained until {st['model']['trained_until']}, "
+                    f"models trained until {st['model']['trained_until']}, served by {st['model']['served']} "
+                    f"(text: {st['model']['text_status']}); raions: {rz.get('models_source')} models, "
+                    f"tier {rz.get('tier')}, methods {rz.get('methods')}; "
                     f"{st['verification']['n_verified']} forecasts verified.\n\n"
                     f"| step | seconds |\n|---|---|\n{rows}\n| **total so far** | {st['elapsed_s']} |\n")
 
 
 # ------------------------------------------------------------- retrain trigger
-def retrain_reason(meta: dict, dataset_end: datetime | None, after_h: float) -> str | None:
+def retrain_reason(meta: dict, dataset_end: datetime | None, after_h: float,
+                   missing_layers: list[str] | None = None) -> str | None:
     """Why the train job should run now (None: the served models are fine)."""
     if not meta:
         return "no models"
+    if missing_layers:
+        return f"the bundle has no {' and no '.join(missing_layers)} models"
     if meta.get("holdout_start") is None:
         return "models were trained by the pipeline's fallback (no holdout scores)"
     trained = parse_ts(meta.get("data_end"))
@@ -270,16 +294,20 @@ def cmd_retrain_check(a) -> None:
     meta = _read_json(Path(a.models) / "meta.json")
     fc = _read_json(ROOT / "reports" / "forecast_meta.json")
     end = parse_ts((fc.get("history_ends_utc") or "").replace(" ", "T") + "Z") if fc.get("history_ends_utc") else None
-    why = retrain_reason(meta, end, a.after_hours)
+    missing = [name for name, sub in (("raion", "raions"), ("text", "text"))
+               if not (Path(a.models) / sub / "meta.json").exists()]
+    why = retrain_reason(meta, end, a.after_hours, missing)
     if why is None:
         print("models are current")
         return
     ref = os.environ["GITHUB_REF_NAME"]
     recent = runs(a.workflow, ref, per_page=5)
-    cutoff = utcnow() - timedelta(minutes=a.cooldown)
+    # a layer that keeps failing to train must not trigger a train run every hour
+    cooldown = max(a.cooldown, 360) if why.startswith("the bundle has no") else a.cooldown
+    cutoff = utcnow() - timedelta(minutes=cooldown)
     busy = [r for r in recent if r["status"] != "completed" or parse_ts(r["created_at"]) > cutoff]
     if busy:
-        print(f"retrain wanted ({why}) but a train run is running or started < {a.cooldown} min ago: {busy[0]['html_url']}")
+        print(f"retrain wanted ({why}) but a train run is running or started < {cooldown:.0f} min ago: {busy[0]['html_url']}")
         return
     dispatch(a.workflow, ref)
     notice(f"dispatched {a.workflow} on {ref}: {why}")

@@ -3,16 +3,17 @@
 #   live-data.sh checkout          worktree at $STORE (orphan branch on the first run)
 #   live-data.sh commit "message"  commit $STORE and push, rebasing on concurrent pushes
 #
-# STORE_DAYS=N (the 10-minute pipeline): fetch only the tip commit, without file
-# contents, and check out only _state/ and the day partitions of the last N days
-# (plus tomorrow, for a run that crosses midnight UTC). The store grows by every
-# run and is never rewritten, so a full checkout would get slower every day; the
-# pipeline reads at most ~10 days back. Without STORE_DAYS (daily history pull)
-# the full tree is checked out.
+# STORE_DAYS=N (pipeline, train and history jobs): fetch only the tip commit, without
+# file contents, and check out only _state/ and the day partitions of the last N
+# days (plus tomorrow, for a run that crosses midnight UTC); OUTPUT_DAYS=M (default
+# N) limits the forecasts / verification partitions to M days. The store grows by
+# every run and is never rewritten, so a full checkout would get slower every day.
+# Without STORE_DAYS the full tree is checked out.
 set -euo pipefail
 STORE="${STORE:-live-data}"
 BRANCH=live-data
-KINDS="polls alerts_active alerts_history history_pulls forecasts verification"
+KINDS="polls alerts_active alerts_history history_pulls"
+OUTPUTS="forecasts verification"
 
 case "$1" in
   checkout)
@@ -22,17 +23,26 @@ case "$1" in
       git fetch -q origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" || true
     fi
     if ! git rev-parse --verify -q "origin/$BRANCH" >/dev/null; then
+      if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null; then
+        echo "could not fetch $BRANCH" >&2; exit 1  # never start a second, unrelated history
+      fi
       git worktree add -q --orphan -b "$BRANCH" "$STORE"
     elif [ -n "${STORE_DAYS:-}" ]; then
       git worktree add -q --no-checkout -B "$BRANCH" "$STORE" "origin/$BRANCH"
       dirs="_state"
-      for day in $(date -u -d tomorrow +%F) $(for d in $(seq 0 "$STORE_DAYS"); do date -u -d "$d days ago" +%F; done); do
+      days() { date -u -d tomorrow +%F; for d in $(seq 0 "$1"); do date -u -d "$d days ago" +%F; done; }
+      for day in $(days "$STORE_DAYS"); do
         for k in $KINDS; do dirs="$dirs $k/$day"; done
       done
+      if [ "${OUTPUT_DAYS:-$STORE_DAYS}" -gt 0 ]; then
+        for day in $(days "${OUTPUT_DAYS:-$STORE_DAYS}"); do
+          for k in $OUTPUTS; do dirs="$dirs $k/$day"; done
+        done
+      fi
       # shellcheck disable=SC2086
       git -C "$STORE" sparse-checkout set --cone $dirs
       git -C "$STORE" checkout -q "$BRANCH"
-      echo "store: $(find "$STORE" -name '*.parquet' | wc -l) parquet files of the last $STORE_DAYS days checked out"
+      echo "store: $(find "$STORE" -name '*.parquet' | wc -l) parquet files checked out (observations $STORE_DAYS days, outputs ${OUTPUT_DAYS:-$STORE_DAYS})"
     else
       git worktree add -q -B "$BRANCH" "$STORE" "origin/$BRANCH"
     fi

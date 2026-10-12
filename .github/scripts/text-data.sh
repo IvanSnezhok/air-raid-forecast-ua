@@ -1,20 +1,18 @@
 #!/usr/bin/env bash
-# [hook: PR 3, text signals] Update the `text-data` archive (public Telegram channels,
-# news) in the pipeline, once `python -m airraid.text.collect` exists (src/airraid/text/).
-# Runs only when that module is present; the exact command is reconciled when PR 3 lands.
+# The `text-data` archive (public Telegram channels, news; src/airraid/text/) in the
+# pipeline, which is its one writer every 10 minutes (text-collect.yml runs by hand only).
 #   text-data.sh checkout check out text-data (shallow) only (train job)
 #   text-data.sh update   check out text-data and fetch what is new (pipeline, before the forecast)
 #   text-data.sh commit   commit and push it (rebasing on concurrent pushes)
-# The pipeline is then the one writer of text-data every 10 minutes: the separate
-# hourly text-collect workflow's schedule should go when this is merged.
 set -euo pipefail
-[ -f src/airraid/text/collect.py ] || { echo "text collector not in this checkout: skipped"; exit 0; }
 checkout() {
   [ -d text-data ] && return 0
   if git fetch -q --depth=1 origin "+refs/heads/text-data:refs/remotes/origin/text-data"; then
     git worktree add -q -B text-data text-data origin/text-data
+  elif ! git ls-remote --exit-code --heads origin text-data >/dev/null; then
+    git worktree add -q --orphan -b text-data text-data  # first run: start the archive
   else
-    git worktree add -q --orphan -b text-data text-data
+    echo "could not fetch text-data" >&2; exit 1  # never start a second, unrelated history
   fi
 }
 case "$1" in

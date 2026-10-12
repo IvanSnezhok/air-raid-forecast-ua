@@ -669,17 +669,21 @@ Everything runs on GitHub Actions; nothing needs a laptop or a server.
  pipeline.yml ── gate ── skip if the last update is < 5 min old (duplicate trigger)
             │
             ▼ run (one at a time: concurrency group, never cancelled)
-   1 check out the store            live-data branch, tip only, last 10 days of partitions
-   2 restore the served models      Actions cache  ◄──────────── train.yml (daily, on new data, by hand)
-   3 download the volunteer dataset                                trains + holdout week, saves the bundle
+   1 check out the store            live-data, tip only: 31 days of observations, 10 of outputs
+   2 restore the served models      Actions cache  ◄──────────── train.yml (daily, on new data, by hand):
+   3 download the dataset                                          oblast models + holdout week, raion
+     (+ official raion file, cached)                               models, history + Telegram models
    4 poll alerts.in.ua              → store: polls, alerts_active
-   5 forecast (predict_now.py)      → store: forecasts        (trains once only if no compatible models)
-   6 threat type (after 5)          multiplies P(onset) by P(type | onset), same origin
-   7 verify (verify.py)             → store: verification     (24 h / 7 d Brier vs climatology, hit rate)
-   8 build the static site          same models, forecast and verification (store mode, no training)
-   9 status.json                    → site api/status.json + store _state/pipeline.json
-  10 commit the store               new files only, rebase-and-retry against other writers
-  11 dispatch train.yml             if the dataset has 6 h more data than the models
+   5 update the text archive        → text-data: new Telegram posts and news (pipeline = only writer)
+   6 forecast (predict_now.py)      → store: forecasts, with the served model per row (history-only
+                                      or history + Telegram); trains once only if no oblast models
+   7 threat type (after 6)          P(onset) × P(type | onset), same origin, posts from text-data
+   8 verify (verify.py)             → store: verification     (24 h / 7 d Brier vs climatology, hit rate)
+   9 build the static site          same models, forecast and verification; raion layer with the
+                                      saved raion models (store mode, AIRRAID_*_TRAIN=0: no training)
+  10 status.json                    → site api/status.json + store _state/pipeline.json
+  11 commit live-data and text-data new partitions / archive files, rebase-and-retry
+  12 dispatch train.yml             if the dataset has 6 h more data than the models, or a layer is missing
             │
             ├─ deploy ── GitHub Pages (main only)
             └─ keep-alive ── wait for the next slot + 3 min; if nothing started a newer run, dispatch one
@@ -689,7 +693,9 @@ Everything runs on GitHub Actions; nothing needs a laptop or a server.
 | what | where it lives | written by |
 |---|---|---|
 | polls, active alerts, history pulls, forecasts, verification, run status | branch `live-data` (append-only parquet, `src/airraid/store.py`) | pipeline, collect-history |
-| served model bundle (`airraid.training`) | Actions cache `models-v2-<code hash>-<data end>-<trained at>` | train.yml (pipeline only as a fallback) |
+| Telegram posts and news, as first seen | branch `text-data` (`src/airraid/text/archive.py`) | pipeline (text-collect.yml by hand) |
+| served model bundle: oblast models (`airraid.training`), `raions/`, `text/` | Actions cache `models-v2-<code hash>-<data end>-<trained at>` | train.yml (pipeline only as a fallback, oblast models only) |
+| official raion-level file (stopped updating 2026-09-07) | Actions cache `official-data-en-v1` | pipeline / train job, downloaded once |
 | the site (`api/*.json`, UI) | GitHub Pages | pipeline (deploy job) |
 | Air Force posts (threat-type model) | branch `threat-labels-data` | threat-labels.yml |
 
@@ -775,28 +781,17 @@ trains once without the holdout, saves the bundle and asks the train job for a f
 one. A gate skips triggers that land within 5 minutes of the last update. The site
 shows "updated HH:MM" and a warning when its data is more than 30 minutes old.
 
-**Optional layers (hooks).** Steps marked `[optional]` / `[hook: ...]` in the workflows run
-only when the code they need exists, so the pipeline works before and after those layers
-land:
-
-* *Raion layer* (`src/airraid/raions.py` …): the official raion-level file is cached
-  under a fixed key (it stopped updating on 2026-09-07) and downloaded once; the store
-  checkout widens to 31 days (the full raion model needs 28 days of history); the raion
-  models are trained by the train job (`scripts/train_models.py --raions`) into
-  `<models>/raions`, which is cached and restored with the oblast bundle, and the model
-  cache key also hashes the raion code. Interface expected from
-  `airraid_app.raion_engine.RaionForecaster`: `save(dir)` / `load_saved(dir)` next to
-  `prepare()`; the static build loads them from `AIRRAID_RAION_MODEL_DIR` (default
-  `<AIRRAID_MODEL_DIR>/raions`), and `AIRRAID_RAION_TRAIN=0` (set by the pipeline) forbids
-  training inside the 10-minute run.
-* *Text signals* (`src/airraid/text/`): `.github/scripts/text-data.sh` updates the
-  `text-data` archive before the forecast and commits it after the run (the pipeline is
-  then its one writer); the forecast step adds `--text-root text-data --text-no-fetch`
-  and the build gets `AIRRAID_TEXT_ROOT`; the train job trains the text models into
-  `<models>/text` (`python -m airraid.text.serving train`), cached with the bundle and
-  hashed into its key; `status.json` reports which model served (`model.served`,
-  `model.text_status`); the threat-type step reads its posts from the archive when
-  `predict_type_now.py --store` exists.
+**Raion and text layers.** Their models are trained only by the train job and travel in the
+same cached bundle: `scripts/train_models.py --raions` trains the raion models on the
+official file and the store's raion history and saves them to `<models>/raions`
+(`RaionForecaster.save`); `python -m airraid.text.serving train` saves the history +
+Telegram models to `<models>/text`. The pipeline sets `AIRRAID_RAION_TRAIN=0` and
+`AIRRAID_TEXT_TRAIN=0`, so the forecast and the site build only load them: without saved
+raion models the raion forecast is oblast × share (`models_source: "none"`), without text
+models the history-only model serves (`text_status` says why), and the next train run is
+requested. The cache key hashes the raion and text code and selections too. `status.json`
+reports the served model (`model.served`, `model.text_status`) and the raion layer
+(`raions.models_source`, `tier`, and how many values each method produced).
 
 **What the owner must configure**
 

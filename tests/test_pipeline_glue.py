@@ -50,6 +50,17 @@ def test_retrain_reason():
     assert "more data" in P.retrain_reason(ok, end + timedelta(hours=7), 6)
     assert "fallback" in P.retrain_reason({**ok, "holdout_start": None}, end, 6)
     assert P.retrain_reason({}, end, 6) == "no models"
+    assert P.retrain_reason(ok, end, 6, ["raion", "text"]) == "the bundle has no raion and no text models"
+
+
+def test_raion_summary_counts_the_methods_served():
+    raions = {"models_source": "saved", "tier": "live_state", "n_active": 3, "raions": [
+        {"method": {"active": {"1": "lightgbm_state", "3": "oblast_x_share"}, "onset": {"1": "oblast_x_share"}}},
+        {"method": {"active": {"1": "oblast"}, "onset": {"1": "oblast_x_share"}}}]}
+    s = P.raion_summary(raions)
+    assert s["models_source"] == "saved" and s["tier"] == "live_state" and s["n_raions"] == 2
+    assert s["methods"] == {"oblast_x_share": 3, "lightgbm_state": 1, "oblast": 1}
+    assert P.raion_summary({}) is None
 
 
 def test_models_key_changes_with_modelling_code(tmp_path):

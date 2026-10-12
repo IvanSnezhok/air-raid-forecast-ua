@@ -23,34 +23,26 @@ from airraid.data import download, load_alerts  # noqa: E402
 
 
 def train_raions(alerts, out: Path, threads: int) -> None:
-    """[hook: raion layer] Train the raion models here, out of the 10-minute run, into
-    <models>/raions, which is cached and restored together with the oblast bundle.
+    """Train the raion models here, out of the 10-minute run, and save them to <models>/raions,
+    which is cached and restored with the oblast bundle; the pipeline's site build only
+    loads them (RaionForecaster.load_saved, AIRRAID_RAION_TRAIN=0).
 
-    Interface the raion layer provides (airraid_app.raion_engine.RaionForecaster):
-      load(refresh)                   official file + store history (AIRRAID_OFFICIAL_PATH, AIRRAID_STORE)
-      prepare(alerts, now, threads)   shares and raion models (training; dataset + raion history only)
-      save(dir) / load_saved(dir)     persist / restore models, model_info, shares, share_period
-    The pipeline's static build then calls load_saved(AIRRAID_RAION_MODEL_DIR, default
-    <AIRRAID_MODEL_DIR>/raions) instead of prepare(); AIRRAID_RAION_TRAIN=0 forbids training there.
-    Skipped (with a notice) until the raion layer exists and has save().
+    They learn from the official raion file and the store's raion history
+    (AIRRAID_OFFICIAL_PATH, AIRRAID_STORE), never from the forecast moment's live data.
     """
-    try:
-        from airraid_app.config import Settings
-        from airraid_app.raion_engine import RaionForecaster
-    except ImportError:
-        print("raion layer not in this checkout: no raion models")
-        return
-    if not hasattr(RaionForecaster, "save"):
-        print("::notice::RaionForecaster has no save(dir) yet: raion models are not cached")
-        return
     import pandas as pd
+
+    from airraid_app.config import Settings
+    from airraid_app.raion_engine import RaionForecaster
 
     t = time.time()
     rf = RaionForecaster(Settings.from_env())
     rf.load(True)
     rf.prepare(alerts, pd.Timestamp.now(tz="UTC"), threads)
     rf.save(out)
-    print(f"raion models saved to {out} in {time.time() - t:.0f}s")
+    kinds = sorted({k for k, _, _ in rf.models})
+    print(f"raion models {kinds or 'none (not enough covered raion history)'}, shares for "
+          f"{len(rf.shares)} target/horizons, saved to {out} in {time.time() - t:.0f}s")
 
 
 def main() -> None:
@@ -59,7 +51,7 @@ def main() -> None:
     ap.add_argument("--threads", type=int, default=int(os.environ.get("AIRRAID_LGB_THREADS", 4)))
     ap.add_argument("--holdout-days", type=int, default=7)
     ap.add_argument("--no-download", action="store_true", default=os.environ.get("AIRRAID_DOWNLOAD") == "0")
-    ap.add_argument("--raions", action="store_true", help="also train the raion models into OUT/raions (hook)")
+    ap.add_argument("--raions", action="store_true", help="also train the raion models into OUT/raions")
     args = ap.parse_args()
     t = time.time()
     if not args.no_download:

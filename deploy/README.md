@@ -5,8 +5,9 @@
 
 | Workflow | Коли | Що робить | Секрети / змінні |
 |---|---|---|---|
-| `pipeline.yml` | кожні 10 хв (:03, :13, …) + keep-alive + ручний запуск / пінгер | опитування alerts.in.ua → прогноз (моделі з кешу) → тип загрози → перевірка минулих прогнозів → статичний сайт → GitHub Pages; усе зберігається в гілці `live-data` | `ALERTS_IN_UA_TOKEN`; `PIPELINE_KEEPALIVE`, `PIPELINE_KEEPALIVE_MAX_HOPS` (необовʼязково) |
-| `train.yml` | щодня, коли датасет посунувся на 6 год, вручну | навчає набір моделей і кладе його в кеш Actions | – |
+| `pipeline.yml` | кожні 10 хв (:03, :13, …) + keep-alive + ручний запуск / пінгер | опитування alerts.in.ua → нові пости Telegram і новини (гілка `text-data`) → прогноз (моделі з кешу: історія або історія + Telegram) → тип загрози → перевірка минулих прогнозів → статичний сайт з районним шаром → GitHub Pages; усе зберігається в гілках `live-data` і `text-data` | `ALERTS_IN_UA_TOKEN`; `PIPELINE_KEEPALIVE`, `PIPELINE_KEEPALIVE_MAX_HOPS` (необовʼязково) |
+| `train.yml` | щодня, коли датасет посунувся на 6 год, вручну | навчає моделі областей (з відкладеним тижнем), районів і з Telegram-сигналами та кладе їх одним набором у кеш Actions | – |
+| `text-collect.yml` | лише вручну | історія новин GDELT, дозбирання архіву Telegram (щоразу його поповнює `pipeline.yml`) | – |
 | `collect.yml` | щодня 02:41 UTC | історія alerts.in.ua за місяць (API зберігає ~30 днів) у `live-data` | `ALERTS_IN_UA_TOKEN` |
 | `threat-labels.yml` | щодня | пости Повітряних сил для моделі типу загрози (`threat-labels-data`) | – |
 | `deploy-space.yml` | пуш у `main`, вручну | сервер FastAPI на Hugging Face Spaces (необовʼязково) | `HF_TOKEN`, змінна `HF_SPACE` |
@@ -53,6 +54,6 @@
 ## Telegram
 
 Старий `telegram.yml` (Telethon, потребував `TG_SESSION_STRING`, жодного разу не відпрацював і
-нічим не споживався) прибрано. Збір текстових сигналів без секретів додає окремий PR
-(`airraid.text`), конвеєр уже має для нього необовʼязкові кроки (`.github/scripts/text-data.sh`).
-`tg_session_string.py` лишається для локальних експериментів.
+нічим не споживався) прибрано. Публічні канали збирає без секретів `airraid.text` у кожному
+запуску конвеєра (`.github/scripts/text-data.sh`). `tg_session_string.py` лишається для
+локальних експериментів.

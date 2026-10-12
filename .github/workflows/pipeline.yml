@@ -1,11 +1,14 @@
 # The 10-minute pipeline. One run, in order:
-#   check out the store (live-data branch, last 10 days) -> poll alerts.in.ua ->
-#   forecast with the served models (predict_now.py; trains once only if none are
-#   compatible) -> threat-type forecast (needs the main forecast) -> verify past
-#   forecasts -> build the static site from the same models, forecast and
-#   verification -> status.json -> commit the new store partitions -> deploy to
-#   GitHub Pages (main only) -> keep-alive.
-# Training is the train job's business (train.yml); the models come from its cache.
+#   check out the store (live-data: 31 days of observations, 10 days of outputs) and
+#   the text archive (text-data) -> poll alerts.in.ua -> update the text archive
+#   (Telegram, news) -> forecast with the served models (predict_now.py: oblast
+#   history + Telegram models; trains once only if none are compatible) ->
+#   threat-type forecast (needs the main forecast) -> verify past forecasts ->
+#   build the static site from the same models, forecast and verification, with the
+#   raion layer (saved raion models) -> status.json -> commit live-data and
+#   text-data -> deploy to GitHub Pages (main only) -> keep-alive.
+# Training is the train job's business (train.yml: oblast, text and raion models in one
+# cached bundle); this workflow only loads them (AIRRAID_*_TRAIN=0).
 # Logic lives in scripts/ and .github/scripts/; see README "Automation".
 #
 # Triggers (layered, because GitHub's schedule is best effort):
@@ -51,8 +54,8 @@ env:
   AIRRAID_STORE: live-data
   AIRRAID_MODEL_DIR: var/models
   AIRRAID_DOWNLOAD: "0"  # the dataset is downloaded once per run, by its own step
-  AIRRAID_RAION_TRAIN: "0"  # [hook: raion layer] load raion models from <models>/raions, never train here
-  AIRRAID_TEXT_TRAIN: "0"   # [hook: text signals] load text models from <models>/text; if missing, serve history-only
+  AIRRAID_RAION_TRAIN: "0"  # raion models: load <models>/raions, never train here (else oblast x share)
+  AIRRAID_TEXT_TRAIN: "0"   # text models: load <models>/text, never train here (else history-only)
   SOURCE: ${{ inputs.source || github.event_name }}
   HOP: ${{ inputs.hop || '0' }}
 
@@ -101,15 +104,13 @@ jobs:
           path: var/models
           key: ${{ steps.key.outputs.prefix }}-${{ github.run_id }}
           restore-keys: ${{ steps.key.outputs.prefix }}-
-      # [hook: raion layer] its full raion model needs 28 days of store history: 31 days then
-      - name: Check out the store (last 10 days; 31 with the raion layer)
+      # observations for 31 days (the full raion model needs 28 days of raion history),
+      # forecasts and verification for 10 (verify reads 8 days)
+      - name: Check out the store
         id: store
-        run: |
-          STORE_DAYS=$([ -f src/airraid/raions.py ] && echo 31 || echo 10) \
-            python3 scripts/pipeline.py timed checkout_store -- bash .github/scripts/live-data.sh checkout
-      # [hook: raion layer] the official file stopped updating on 2026-09-07: cached under a fixed key
-      - name: "[optional] Official raion-level file (cached)"
-        if: hashFiles('src/airraid/raion_data.py') != ''
+        run: STORE_DAYS=31 OUTPUT_DAYS=10 python3 scripts/pipeline.py timed checkout_store -- bash .github/scripts/live-data.sh checkout
+      # the official raion-level file stopped updating on 2026-09-07: cached under a fixed key
+      - name: Official raion-level file (cached)
         uses: actions/cache@v4
         with:
           path: data/raw/official_data_en.csv
@@ -118,7 +119,7 @@ jobs:
         run: >-
           python3 scripts/pipeline.py timed dataset -- bash -c
           'for i in 1 2 3; do python -c "from airraid.data import download; download()" && break; sleep 10; [ $i = 3 ] && exit 1; done;
-          if [ -f src/airraid/raion_data.py ] && [ ! -f data/raw/official_data_en.csv ]; then
+          if [ ! -f data/raw/official_data_en.csv ]; then
           python -c "from airraid.raion_data import download_official; download_official()"; fi'
       - name: Poll alerts.in.ua
         if: env.HAS_TOKEN == 'true'
@@ -126,20 +127,20 @@ jobs:
         env:
           ALERTS_IN_UA_TOKEN: ${{ secrets.ALERTS_IN_UA_TOKEN }}
         run: python3 scripts/pipeline.py timed poll -- python -m airraid.collect poll --root "$STORE"
-      # [hook: PR 3, text signals] runs only once src/airraid/text/collect.py exists
-      - name: "[optional] Text signals: update the text-data archive"
-        if: hashFiles('src/airraid/text/collect.py') != ''
-        continue-on-error: true
+      # the pipeline is the one writer of text-data (text-collect.yml runs only by hand)
+      - name: Update the text archive (Telegram channels, news)
+        id: text
+        continue-on-error: true  # without it the forecast serves the history-only model and says so
         run: |
           python3 scripts/pipeline.py timed text_collect -- bash .github/scripts/text-data.sh update
           echo "AIRRAID_TEXT_ROOT=text-data" >> "$GITHUB_ENV"  # the static build serves the same text model
       - name: Forecast (served models; no training unless none are compatible)
-        # with the text archive: the history + Telegram model (text models from <models>/text), posts
-        # already fetched by the collector step
+        # history + Telegram model from <models>/text where the archive covers the origin;
+        # posts were just fetched by the archive update
         run: >-
           python3 scripts/pipeline.py timed forecast -- python predict_now.py --store "$STORE"
           --models "$AIRRAID_MODEL_DIR" --threads 4
-          $([ -d text-data ] && grep -q -- --text-root predict_now.py && echo --text-root text-data --text-no-fetch)
+          $([ -d text-data/telegram ] && echo --text-root text-data --text-no-fetch)
       - name: Model info
         id: minfo
         run: python3 scripts/pipeline.py models-info --models "$AIRRAID_MODEL_DIR"
@@ -155,8 +156,7 @@ jobs:
       - name: Verify past forecasts
         continue-on-error: true  # the site then shows the previous verification
         run: python3 scripts/pipeline.py timed verify -- python verify.py --store "$STORE"
-      # [hook: PR 2, raion layer] build_static_site.py exports api/raions*.json itself
-      - name: Build the static site (same models, forecast and verification; no training)
+      - name: Build the static site (same models, forecast and verification; raion layer; no training)
         run: python3 scripts/pipeline.py timed build_site -- python scripts/build_static_site.py site
       - name: Status (api/status.json, _state/pipeline.json, step timings)
         if: always() && steps.store.outcome == 'success'
@@ -168,8 +168,8 @@ jobs:
       - name: Commit the new store partitions to live-data
         if: always() && steps.store.outcome == 'success'
         run: bash .github/scripts/live-data.sh commit "pipeline $(date -u +%FT%H:%MZ) ${SOURCE}"
-      - name: "[optional] Text signals: commit text-data"
-        if: always() && hashFiles('src/airraid/text/collect.py') != ''
+      - name: Commit the text archive to text-data
+        if: always() && steps.text.outcome != 'skipped'
         continue-on-error: true
         run: bash .github/scripts/text-data.sh commit
       - name: Retrain when the dataset has moved on

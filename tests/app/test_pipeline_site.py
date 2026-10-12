@@ -21,6 +21,10 @@ import predict_now  # noqa: E402
 from airraid import store  # noqa: E402
 from airraid.data import load_alerts  # noqa: E402
 from airraid.verification import verify  # noqa: E402
+from airraid_app.config import Settings  # noqa: E402,F401
+from airraid_app.raion_engine import RaionForecaster  # noqa: E402
+
+from .test_engine_text import _archive  # noqa: E402
 
 
 def _poll(root, t, odesa_since=None):
@@ -100,3 +104,54 @@ def test_pipeline_site_serves_the_stored_forecast(settings, tmp_path, fake_now):
     assert a1["n"] == len(log["region"].unique())
     strip = json.loads((out2 / "api" / "regions" / "odeska.json").read_text())["verification"]["active_h1"]
     assert [x["y"] for x in strip] == [1]  # the verified forecast is shown with its outcome
+
+
+def test_pipeline_site_with_text_and_raion_layers(settings, tmp_path, fake_now, monkeypatch):
+    """All layers as the pipeline runs them: the train job's text and raion models, then a
+    sub-hour forecast served by the history + Telegram model, and a site build that only
+    loads the saved raion models (AIRRAID_RAION_TRAIN=0) and serves the logged numbers."""
+    monkeypatch.setattr("airraid.text.telegram.FEATURE_CHANNELS", ["kpszsu"])
+    monkeypatch.setattr("airraid.text.features.FEATURE_CHANNELS", ["kpszsu"])
+    monkeypatch.setattr("airraid.text.live.fetch", lambda *a, **k: {})  # offline
+    alerts = load_alerts(settings.data_path)
+    hist_end = alerts["start"].max()
+    root, models, reports, text = tmp_path / "store", tmp_path / "models", tmp_path / "reports", tmp_path / "text-data"
+    reports.mkdir()
+    sel = {f"lightgbm_text|{t}_h{h}": {"trees": 20} for t in ("active", "onset") for h in (1, 2, 3, 6)}
+    (reports / "text_selection.json").write_text(json.dumps(sel))
+    _archive(text, settings.data_path, "2030-01-01T00:00:00Z")
+    t_poll = hist_end.ceil("h") + pd.Timedelta(hours=1, minutes=13, seconds=20)
+    t = hist_end - pd.Timedelta(minutes=20)
+    while t <= t_poll:
+        fake_now["now"] = t
+        _poll(root, t, t_poll - pd.Timedelta(minutes=30) if t >= t_poll - pd.Timedelta(minutes=30) else None)
+        t += pd.Timedelta(minutes=10)
+    fake_now["now"] = t - pd.Timedelta(minutes=10) + pd.Timedelta(seconds=30)
+
+    log, meta = predict_now.forecast(alerts, fake_now["now"], root, None, models, threads=2, reports_dir=reports,
+                                     text_root=text, text_fetch=False)
+    origin = pd.Timestamp(meta["origin_utc"], tz="UTC")
+    assert origin.minute % 10 != 0 and "lightgbm_text" in meta["model_served"] and meta["text_status"] == "ok"
+    assert set(log["model"]) <= {"lightgbm", "lightgbm_text"} and "lightgbm_text" in set(log["model"])
+
+    s = replace(settings, model_dir=models, store_dir=root, state_dir=tmp_path / "state", type_forecast=None,
+                reports_dir=reports, text_root=text, train_months=12, max_train_months=24, n_trees=300)
+    rf = RaionForecaster(s)  # what the train job does (scripts/train_models.py --raions)
+    rf.load(False)
+    rf.prepare(alerts, fake_now["now"], 2)
+    rf.save(models / "raions")
+
+    def no_raion_training(*a, **k):
+        raise AssertionError("the site build must not train raion models")
+    monkeypatch.setattr(RaionForecaster, "_train", no_raion_training)
+    monkeypatch.setenv("AIRRAID_TEXT_TRAIN", "0")
+    out = tmp_path / "site"
+    build_static_site.build(out, replace(s, raion_train=False))
+    fc = json.loads((out / "api" / "forecast.json").read_text())
+    assert pd.Timestamp(fc["origin"]) == origin and "lightgbm_text" in fc["model"]["served"]
+    assert fc["model"]["text_status"] == "ok"
+    rz = json.loads((out / "api" / "raions.json").read_text())
+    assert rz["models_source"] == "saved" and pd.Timestamp(rz["origin"]) == origin
+    odesa = [r for r in rz["raions"] if r["oblast"] == "Odeska oblast"]
+    assert odesa and all(r["live"]["active"] for r in odesa)  # the oblast-level alert of the same poll
+    assert (out / "api" / "raions" / f"{odesa[0]['id']}.json").exists()

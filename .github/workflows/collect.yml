@@ -51,8 +51,8 @@ jobs:
         run: pip install -q pandas pyarrow
       - name: Check out the data branch
         if: steps.check.outputs.ready == 'true'
-        # 35 days of partitions: the history dedup looks back ~31 days
-        run: STORE_DAYS=35 bash .github/scripts/live-data.sh checkout
+        # 35 days of observations: the history dedup looks back ~31 days (no outputs needed)
+        run: STORE_DAYS=35 OUTPUT_DAYS=0 bash .github/scripts/live-data.sh checkout
       - name: Pull history in chunks, committing after each
         if: steps.check.outputs.ready == 'true'
         env:

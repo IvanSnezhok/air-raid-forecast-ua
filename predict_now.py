@@ -116,7 +116,7 @@ def get_models(alerts: pd.DataFrame, model_dir: Path | None, threads: int, train
 
 
 def text_model(text_root: Path, model_dir: Path | None, alerts: pd.DataFrame, hist_end: pd.Timestamp, grid,
-               threads: int, as_of: bool, fetch: bool):
+               threads: int, as_of: bool, fetch: bool, reports_dir: Path = ROOT / "reports"):
     """(TextServing, text rows at the origin, status): the history + Telegram model and its
     features at the grid's end, or (None, None, reason) and the history-only model serves.
 
@@ -127,7 +127,7 @@ def text_model(text_root: Path, model_dir: Path | None, alerts: pd.DataFrame, hi
     from airraid.features import hourly_fraction, hourly_starts
     from airraid.text.serving import TextServing
 
-    text = TextServing(text_root, (model_dir or MODELS_DIR) / ("text_replay" if as_of else "text"), ROOT / "reports",
+    text = TextServing(text_root, (model_dir or MODELS_DIR) / ("text_replay" if as_of else "text"), reports_dir,
                        threads=threads, fetch=fetch and not as_of)
     tgrid = build_grid(alerts, data_end=hist_end.floor("h")) if text.allow_train else None
     H, S = (hourly_fraction(tgrid), hourly_starts(tgrid)) if tgrid is not None else (None, None)
@@ -209,7 +209,7 @@ def forecast(alerts: pd.DataFrame, now: pd.Timestamp, store_root: Path | None = 
     text, text_rows, text_status = None, None, "off (no --text-root)"
     if text_root is not None:
         text, text_rows, text_status = text_model(text_root, None if as_of else model_dir, alerts, hist_end, grid,
-                                                  threads, as_of, text_fetch)
+                                                  threads, as_of, text_fetch, reports_dir)
     log = nowcast.predict(models, grid, text, text_rows)
     served = sorted(set(log["model"]))
     issued_at = pd.Timestamp.now(tz="UTC").floor("s")
