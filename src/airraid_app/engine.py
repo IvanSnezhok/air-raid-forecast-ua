@@ -41,6 +41,7 @@ from .config import Settings
 from .journal import ForecastJournal, LiveRecorder
 from .threats import ThreatForecast
 from .live import LiveState, fetch_active, state_from_alerts, state_from_dataset
+from .raion_engine import RaionForecaster, raion_state
 from .regions import slug, uk_name
 
 log = logging.getLogger("airraid_app")
@@ -97,6 +98,9 @@ class ForecastEngine:
             from airraid.text.serving import TextServing
             self.text = TextServing(settings.text_root, settings.model_dir / "text", settings.reports_dir,
                                     threads=settings.lgb_threads)
+        self.raions = RaionForecaster(settings)
+        # live raion state: (states by raion id, unmatched location titles, as_of); None without live data
+        self._raion_live: tuple[dict, list, pd.Timestamp] | None = None
 
     # ------------------------------------------------------------------ data
     def load_data(self, refresh: bool | None = None) -> None:
@@ -117,6 +121,7 @@ class ForecastEngine:
             self.data_loaded_at = time.time()
             self._forecast = None
         log.info("history: %d alerts, last start %s", len(alerts), self.hist_end)
+        self.raions.load(refresh)
 
     # ---------------------------------------------------------------- models
     def _plans(self) -> dict[tuple[str, int], Plan]:
@@ -212,6 +217,7 @@ class ForecastEngine:
         if self.text is not None:
             self._set("training", "Навчання моделі з Telegram-сигналами")
             self.text.ensure_models(grid, H, S, data_end, self.s.retrain_h)
+        self._prepare_raions(alerts)
         with self.lock:
             self.models, self.meta, self.holdout = models, meta, holdout
             self._forecast = None
@@ -255,12 +261,25 @@ class ForecastEngine:
         if self.text is not None and not self.text.load(pd.Timestamp(meta["data_end"]), self.s.retrain_h):
             return False  # retrain, the text model with it
         holdout = pd.read_parquet(d / "holdout.parquet") if (d / "holdout.parquet").exists() else pd.DataFrame()
+        self._prepare_raions(self.alerts)
         with self.lock:
             self.models, self.meta, self.holdout = models, meta, holdout
             self._forecast = None
         self._set("ready", "Готово")
         log.info("loaded cached models trained on data to %s", meta["data_end"])
         return True
+
+    def _prepare_raions(self, alerts: pd.DataFrame) -> None:
+        # the moment forecasts will be made for: now with live data, else the end of the dataset
+        now = pd.Timestamp.now(tz="UTC") if self.s.alerts_token else self.hist_end.floor("h")
+        try:
+            if self.s.raion_train:
+                self.raions.prepare(alerts, now, self.s.lgb_threads)  # dataset only: training never sees live data
+            elif not (self.s.raion_models and self.raions.load_saved(self.s.raion_models_path)):
+                # AIRRAID_RAION_TRAIN=0 and nothing saved: shares only, oblast x share (labelled)
+                self.raions.prepare(alerts, now, self.s.lgb_threads, train=False)
+        except Exception:  # noqa: BLE001 - the oblast forecast must not depend on the raion layer
+            log.exception("raion layer preparation failed")
 
     # ------------------------------------------------------------------ live
     def live_state(self, max_age: float | None = None) -> LiveState:
@@ -271,12 +290,14 @@ class ForecastEngine:
             alerts, regions = self.alerts, self.regions
         if alerts is None:
             raise NotReady("no data")
-        state = None
+        state, raion_live = None, None
         if self.s.alerts_token:
             try:
                 records = parse_records(fetch_active(self.s.alerts_token))
                 now = pd.Timestamp.now(tz="UTC")
                 state = state_from_alerts(records, regions, now, cleared=self.recorder.cleared(records, now))
+                states, unmatched = raion_state(records)  # display state per raion (all levels)
+                raion_live = (states, unmatched, state.as_of)
             except Exception as e:
                 log.warning("alerts.in.ua failed: %s", e)
                 state = state_from_dataset(alerts, regions, error=f"alerts.in.ua недоступний: {type(e).__name__}")
@@ -285,6 +306,7 @@ class ForecastEngine:
         self.recorder.observe(state)
         with self.lock:
             self._live, self._live_at = state, time.time()
+            self._raion_live = raion_live
         return state
 
     # -------------------------------------------------------------- forecast
@@ -301,7 +323,9 @@ class ForecastEngine:
             origin = hist_end.floor("h")
         ongoing = live.ongoing_alerts()
         ongoing = ongoing[ongoing["start"] < origin] if live.source == "alerts.in.ua" else ongoing.iloc[0:0]
-        key = (origin, hist_end, tuple(map(tuple, ongoing.astype(str).to_numpy())), self.recorder.version())
+        rl = self._raion_live
+        raion_key = None if rl is None else tuple(sorted((k, str(v.since), v.level) for k, v in rl[0].items() if v.active))
+        key = (origin, hist_end, tuple(map(tuple, ongoing.astype(str).to_numpy())), self.recorder.version(), raion_key)
         with self.lock:
             if self._forecast and self._forecast[0] == key:
                 return self._forecast[1]
@@ -416,7 +440,17 @@ class ForecastEngine:
                 for i, r in enumerate(grid.regions)
             ],
         }
+        result["raions"] = self._raion_forecast(origin, probs, alerts)
         return result, pd.concat(journal, ignore_index=True)
+
+    def _raion_forecast(self, origin, probs, alerts) -> dict | None:
+        rl = self._raion_live
+        try:
+            return self.raions.forecast(origin, probs, rl[0] if rl else None, rl[2] if rl else None, alerts,
+                                        rl[1] if rl else None)
+        except Exception:  # noqa: BLE001 - keep serving oblasts
+            log.exception("raion forecast failed")
+            return None
 
     # ---------------------------------------------------------- verification
     def verification(self, region: str | None = None, recent_hours: int = 24) -> dict:

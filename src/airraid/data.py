@@ -93,25 +93,31 @@ def _merge(starts: np.ndarray, ends: np.ndarray) -> tuple[np.ndarray, np.ndarray
     return np.array(out_s, dtype=np.int64), np.array(out_e, dtype=np.int64)
 
 
-def build_grid(alerts: pd.DataFrame, data_end: pd.Timestamp | None = None) -> AlertGrid:
+def build_grid(alerts: pd.DataFrame, data_end: pd.Timestamp | None = None, regions: list[str] | None = None,
+               t0: pd.Timestamp | None = None) -> AlertGrid:
     """Rasterise alerts onto a minute grid.
 
     `data_end` is the moment up to which we treat the data as complete. Anything
     after it is unknown, so alerts are clipped there. Passing an earlier
     `data_end` simulates what the data looked like at that moment; the leakage
-    test uses this.
+    test uses this. `regions` / `t0` fix the rows and the start of the grid
+    (default: the regions in the data, the day of the first alert); the raion
+    layer uses them to keep raions without recent alerts.
     """
     if data_end is None:
         data_end = alerts["start"].max().floor("h")
     alerts = alerts[alerts["start"] < data_end]
-    t0 = alerts["start"].min().floor("D")
+    if t0 is None:
+        t0 = alerts["start"].min().floor("D")
+    else:
+        alerts = alerts[alerts["end"] > t0]
     n_minutes = int((data_end - t0) / pd.Timedelta(minutes=1))
-    regions = sorted(alerts["region"].unique())
+    regions = sorted(alerts["region"].unique()) if regions is None else sorted(regions)
     active = np.zeros((len(regions), n_minutes), dtype=bool)
     starts, ends = [], []
     for i, reg in enumerate(regions):
         sub = alerts[alerts["region"] == reg]
-        s = ((sub["start"] - t0) / pd.Timedelta(minutes=1)).to_numpy().astype(np.int64)
+        s = np.maximum(((sub["start"] - t0) / pd.Timedelta(minutes=1)).to_numpy(), 0).astype(np.int64)
         e = np.ceil((sub["end"] - t0) / pd.Timedelta(minutes=1)).to_numpy().astype(np.int64)
         e = np.minimum(e, n_minutes)
         s, e = _merge(s, e)
