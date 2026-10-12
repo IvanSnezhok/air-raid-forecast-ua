@@ -205,11 +205,46 @@ function rampColor(p) {
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const darkMode = () => window.matchMedia("(prefers-color-scheme: dark)").matches;
 const invText = (p) => (darkMode() ? p > 0.6 : p > 0.55);
-const LEVEL_CUTS = [0.15, 0.4, 0.7, 1.01];
-const levelIdx = (p) => LEVEL_CUTS.findIndex((x) => p < x);
+const LEVEL_CUTS = [0.15, 0.4, 0.7, 1.01];  // low / moderate / high / very high (shown in the "?" explanation)
+const levelIdx = (p) => LEVEL_CUTS.findIndex((x) => Math.round(p * 100) / 100 < x);
 const levelWord = (p) => t(`lvl.${levelIdx(p)}`);
 const level = (p) => (p == null ? "" : `<span class="lvl l${levelIdx(p)}">${levelWord(p)}</span>`);
 const probCell = (p) => (p == null ? `<span class="cell">–</span>` : `<span class="cell" style="background:${rampColor(p)};color:${invText(p) ? "#fff" : "inherit"}">${pct(p)}</span>`);
+// small shares (threat type x chance of a new alert) round to 0%: say "<1%" instead
+const pctSmall = (p) => (p != null && p > 0 && p < 0.005 ? "<1%" : pct(p));
+
+// ---------------------------------------------------------------- "what do the percentages mean"
+// A short line next to every forecast table plus a "?" button that opens the full definition:
+// what is forecast (an air raid alert of any type), both targets with their time windows, what a
+// percentage means (a calibrated probability), the risk words and how the history charts differ.
+const OPEN = new Set();  // ids of the explanations the viewer opened; kept across re-renders
+function infoBtn(id) {
+  return `<button type="button" class="info-btn" aria-expanded="${OPEN.has(id)}" aria-controls="${id}" title="${esc(t("info.btn"))}">`
+    + `<span aria-hidden="true">?</span><span class="sr">${t("info.btn")}</span></button>`;
+}
+function levelsText() {
+  const cuts = LEVEL_CUTS.slice(0, -1).map((x) => Math.round(x * 100));
+  return [0, 1, 2, 3].map((i) => {
+    const range = i === 0 ? t("ex.below", { p: `${cuts[0]}%` })
+      : i === 3 ? t("ex.above", { p: `${cuts[2]}%` }) : t("ex.range", { a: cuts[i - 1], b: `${cuts[i] - 1}%` });
+    return `<span class="nw"><span class="lvl l${i}">${t(`lvl.${i}`)}</span> ${range}</span>`;
+  }).join(", ");
+}
+function explainHTML(id, windows, { raion = false, types = false } = {}) {
+  const w1 = windows?.[1]?.active;
+  const tm = (x) => (x ? fmtTime.format(new Date(x)) : "?");
+  return `<div class="explain" id="${id}"${OPEN.has(id) ? "" : " hidden"}>
+    <p>${t("ex.what")}</p>
+    <p>${t("ex.active", { a: tm(w1?.[0]), b: tm(w1?.[1]) })}</p>
+    <p>${t("ex.onset", { a: tm(w1?.[0]) })}</p>
+    <p>${t("ex.pct")}</p>
+    <p>${t("ex.levels", { list: levelsText() })}</p>
+    ${raion ? `<p>${t("ex.raion")}</p>` : ""}
+    ${types ? `<p>${t("ex.types")}</p>` : ""}
+    <p>${t("ex.charts")}</p></div>`;
+}
+// the short line under a forecast heading, its "?" button and the (hidden) full explanation
+const pctNote = (id, key, windows, opts) => `<p class="pnote">${t(key)} ${infoBtn(id)}</p>${explainHTML(id, windows, opts)}`;
 
 // ---------------------------------------------------------------- state
 const S = {
@@ -426,14 +461,18 @@ function tipHTML(r) {
   if (S.layer === "forecast" && S.target === "type") {
     const x = typeAt(r);
     if (!x) return `${head}<br>${t("tip.notype")}`;
-    return `${head}<br>${t(`lvlc.${x.level}`)}: ${t("tip.mostLikely", { type: t(`typePhrase.${x.most_likely}`) })}`;
+    return `${head}<br>${t("tip.type", { type: t(`typePhrase.${x.most_likely}`), level: t(`lvlc.${x.level}`) })}`;
   }
   if (S.layer === "now") {
     const s = isOn(r) ? (r.active && r.since ? t("tip.alertFor", { d: duration(r.since) }) : t("tip.alert")) : t("tip.noAlert");
     return `${head}<br>${s}`;
   }
-  const p = r.probs?.[S.target]?.[S.horizon];
-  return `${head}<br>${p == null ? "–" : t("tip.prob", { p: pct(p), level: levelWord(p) })}`;
+  return `${head}<br>${probTip(S.target, r.probs?.[S.target]?.[S.horizon], true)}`;
+}
+// "chance of an alert in hour 2: 45% (high)" / "chance of a new alert within 3 h: 60% (high)"
+function probTip(target, p, bold = false) {
+  if (p == null) return "–";
+  return t(target === "active" ? "tip.probActive" : "tip.probOnset", { h: S.horizon, p: bold ? `<b>${pct(p)}</b>` : pct(p), level: levelWord(p) });
 }
 
 const focusOblast = () => (S.unit === "oblast" && S.selected ? regionData(S.selected)?.name || null : null);
@@ -459,7 +498,7 @@ function paintMap() {
     else if (r && S.forecast && S.target === "type") { const x = typeAt(r); fill = x?.p_red == null ? COL.calm : levelColor(x.p_red); }
     else if (r && S.forecast) { p = r.probs?.[S.target]?.[S.horizon]; fill = p == null ? COL.calm : rampColor(p); }
     node.style.fill = fill;
-    node.setAttribute("aria-label", r ? `${oblFull(r.name)}: ${S.layer === "now" ? (isOn(r) ? t("tip.alert") : t("tip.noAlert")) : pct(p)}` : "");
+    node.setAttribute("aria-label", r ? `${oblFull(r.name)}: ${S.layer === "now" ? (isOn(r) ? t("tip.alert") : t("tip.noAlert")) : S.target === "type" ? t("ctl.type") : probTip(S.target, p)}` : "");
     // the focused oblast is drawn by its raions; keep it out of the tab order
     if (isFocus && S.raions) node.setAttribute("tabindex", "-1"); else node.setAttribute("tabindex", "0");
   }
@@ -477,7 +516,7 @@ function paintMap() {
     if (shown && r) {
       node.setAttribute("tabindex", "0");
       const p = r.probs?.[rTarget()]?.[S.horizon];
-      node.setAttribute("aria-label", `${raionName(id)}: ${S.layer === "now" ? (r.live?.active ? t(`live.${r.live.level}`) : r.live ? t("tip.noAlert") : t("raion.noLive")) : pct(p)}`);
+      node.setAttribute("aria-label", `${raionName(id)}: ${S.layer === "now" ? (r.live?.active ? t(`live.${r.live.level}`) : r.live ? t("tip.noAlert") : t("raion.noLive")) : probTip(rTarget(), p)}`);
     } else node.removeAttribute("tabindex");
   }
   // selection outlines on top of everything (a clean line, not clipped by the neighbours)
@@ -500,6 +539,8 @@ function raionFill(r) {
     if (!lv?.active) return c.calm;
     return lv.level === "hromada" ? "url(#part)" : c.alert;
   }
+  // threat type is forecast per oblast only: let the oblast's colour show instead of a raion alert chance
+  if (S.target === "type" && S.unit === "oblast") return "transparent";
   const p = r.probs?.[rTarget()]?.[S.horizon];
   return p == null ? c.calm : rampColor(p);
 }
@@ -536,6 +577,7 @@ function paintLabels() {
   }
   // raions: of the focused oblast (oblast view), or all when zoomed in enough (raion view)
   if (!S.raions || (S.unit === "raion" && k < 2.2) || (S.unit === "oblast" && (!focus || k < 1.8))) return;
+  if (S.layer === "forecast" && S.target === "type") return;  // no raion threat-type forecast to label
   for (const r of S.raions.raions) {
     if (S.unit === "oblast" && r.oblast !== focus) continue;
     const at = raionMeta(r.id)?.label;
@@ -567,7 +609,8 @@ function paintLegend() {
     const stops = [0, 0.2, 0.4, 0.6, 0.8, 1].map((p) => `${rampColor(p)} ${p * 100}%`).join(",");
     const tg = S.unit === "raion" ? rTarget() : S.target;
     lg.innerHTML = `<span>0%</span><span class="bar" style="background:linear-gradient(90deg,${stops})"></span><span>100%</span>
-      <span class="muted">${tg === "active" ? t("legend.probActive") : t("legend.probOnset")}${S.unit === "raion" ? t("legend.raionZoom") : ""}</span>`;
+      <span class="lg-what">${tg === "active" ? t("legend.probActive") : t("legend.probOnset")}${S.unit === "raion" ? t("legend.raionZoom") : ""}</span>
+      <span class="lg-hint muted">${t("legend.pctHint")}</span>`;
   }
 }
 
@@ -816,11 +859,17 @@ function renderRank() {
   const key = S.layer === "now" ? (r) => (active.has(r.id) ? 2 : 0) + r.probs.active[1]
     : S.target === "type" ? (r) => r.types?.[S.horizon]?.p_red ?? -1 : (r) => r.probs[S.target][S.horizon];
   const rows = [...fc.regions].sort((a, b) => key(b) - key(a));
-  tb.innerHTML = `<caption class="sr">${t("rank.oblasts")}</caption><thead><tr><th scope="col">${t("rank.oblast")}</th>${hs.map((h) => `<th scope="col">${t("rank.activeH", { h })}</th>`).join("")}${hs.map((h) => `<th scope="col">${t("rank.onsetH", { h })}</th>`).join("")}</tr></thead>
+  const w = fc.windows || {};
+  const tm = (x) => fmtTime.format(new Date(x));
+  const th = (tg, h, i) => `<th scope="col"${i ? "" : ' class="gs"'} title="${esc(w[h] ? t(tg === "active" ? "rank.colActiveTitle" : "rank.colOnsetTitle", { a: tm(w[h][tg][0]), b: tm(w[h][tg][1]) }) : "")}">${t(tg === "active" ? "rank.colActive" : "rank.colOnset", { h })}</th>`;
+  tb.innerHTML = `<caption class="sr">${t("rank.oblasts")}: ${t("rank.note")}</caption><thead>
+    <tr class="grp"><th scope="col" rowspan="2">${t("rank.oblast")}</th><th scope="colgroup" colspan="${hs.length}" class="gs">${t("rank.grpActive")}</th><th scope="colgroup" colspan="${hs.length}" class="gs">${t("rank.grpOnset")}</th></tr>
+    <tr>${hs.map((h, i) => th("active", h, i)).join("")}${hs.map((h, i) => th("onset", h, i)).join("")}</tr></thead>
     <tbody>${rows.map((r) => `<tr data-id="${r.id}" tabindex="0" class="${r.id === S.selected ? "sel" : ""}">
       <td>${esc(oblShort(r.name))}${active.has(r.id) ? `<span class="badge">${t("badge.alert")}</span>` : ""}</td>
-      ${hs.map((h) => `<td>${probCell(r.probs.active[h])}</td>`).join("")}
-      ${hs.map((h) => `<td>${probCell(r.probs.onset[h])}</td>`).join("")}</tr>`).join("")}</tbody>`;
+      ${hs.map((h, i) => `<td${i ? "" : ' class="gs"'}>${probCell(r.probs.active[h])}</td>`).join("")}
+      ${hs.map((h, i) => `<td${i ? "" : ' class="gs"'}>${probCell(r.probs.onset[h])}</td>`).join("")}</tr>`).join("")}</tbody>`;
+  $("#rank-note").innerHTML = pctNote("ex-rank", "rank.note", fc.windows);
   const w1 = fc.windows?.[1]?.active;
   $("#rank-sub").textContent = t("rank.sub", { time: fmtFull.format(new Date(fc.origin)) })
     + (w1 ? t("rank.sub1", { a: fmtTime.format(new Date(w1[0])), b: fmtTime.format(new Date(w1[1])) }) : "");
@@ -855,7 +904,7 @@ function renderPanel() {
 const pbar = (p) => (p == null ? "–" : `<div class="pbar"><div class="track"><div class="fill" style="width:${Math.round(p * 100)}%;background:${rampColor(Math.max(p, 0.15))}"></div></div><span class="num">${pct(p)}</span></div>`);
 function probsTable(d, hs) {
   const w = d.windows;
-  const rows = hs.map((h) => `<tr><th scope="row" class="h">${t("h.n", { n: h })}<br><span class="small">${fmtTime.format(new Date(w[h].active[0]))}–${fmtTime.format(new Date(w[h].active[1]))}</span></th>
+  const rows = hs.map((h) => `<tr><th scope="row" class="h">${t("probs.hour", { h })}<br><span class="small">${fmtTime.format(new Date(w[h].active[0]))}–${fmtTime.format(new Date(w[h].active[1]))}</span></th>
       <td>${pbar(d.probs.active[h])}</td><td>${pbar(d.probs.onset[h])}</td></tr>`).join("");
   return `<table class="probs"><thead><tr><th></th><th scope="col">${t("probs.active")}</th><th scope="col">${t("probs.onset")}</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
@@ -873,14 +922,15 @@ function renderDetail(d) {
   const h3 = hs.includes(3) ? 3 : hs[0];
   const pa = d.probs.active[1], po = d.probs.onset[h3];
   const tt = d.types?.[3] || d.types?.[1];
-  const typeLine = tt?.most_likely ? " " + t("brief.type", { type: t(`typePhrase.${tt.most_likely}`), level: t(`lvlc.${tt.level}`) }) : "";
+  const typeLine = tt?.most_likely ? `<p>${t("brief.type", { type: t(`typePhrase.${tt.most_likely}`), level: t(`lvlc.${tt.level}`) })}</p>` : "";
   const brief = `<div class="brief">
-    <p>${t("brief.active", { time: fmtTime.format(new Date(d.origin)), likely: t(`likely.${levelIdx(pa)}`), level: level(pa), p: pct(pa) })}</p>
-    <p>${t("brief.onset", { h: h3, likely: t(`likely.${levelIdx(po)}`), level: level(po), p: pct(po) })}${typeLine}</p></div>`;
+    <p>${t("brief.active", { time: fmtTime.format(new Date(d.origin)), level: level(pa), p: pct(pa) })}</p>
+    <p>${t("brief.onset", { h: h3, level: level(po), p: pct(po) })}</p>${typeLine}</div>`;
   $("#detail").innerHTML = `
     <h2>${esc(oblFull(d.name))}</h2>${status}${locs}${brief}
     <p class="small muted">${t(S.state?.source === "alerts.in.ua" ? "detail.srcLive" : "detail.srcDataset")}; ${t("detail.origin", { time: fmtTime.format(new Date(d.origin)) })}</p>
     <h3>${t("detail.forecast")}</h3>
+    ${pctNote("ex-region", "detail.note", d.windows, { types: !!(d.types && S.forecast?.threats) })}
     ${probsTable(d, hs)}
     ${raionListHTML(d.name)}
     ${typesHTML(d.types)}
@@ -919,9 +969,10 @@ function raionListHTML(oblast) {
   const methods = (r) => [...new Set([r.method.active[1], r.method.onset[h3], r.method.onset[hL]])].map(mtag).join(" ");
   return `<h3>${t("rlist.title")}</h3>
     <p class="small rsum">${liveRaions() ? t("rlist.summary", { n: on.length, m: rs.length }) + (part.length ? t("rlist.summaryPart", { n: part.length }) : "") : t("raion.noLive")}</p>
+    <div class="rcap small muted" aria-hidden="true"><span></span><span>${t("rlist.cap")}</span></div>
     <div class="rhead small muted" aria-hidden="true"><span></span><span>${t("rlist.h1")}</span><span>${t("rlist.h3", { h: h3 })}</span><span>${t("rlist.h3", { h: hL })}</span></div>
     <ul class="rlist">${rows.map((r) => `<li><button type="button" class="rrow${r.live?.active ? " on" : ""}${r.id === S.rsel ? " sel" : ""}" data-rid="${r.id}"
-        aria-label="${esc(`${raionName(r.id, r)}: ${r.live?.active ? t(`live.${r.live.level}`) : t("tip.noAlert")}. ${t("rlist.h1")} ${pct(r.probs.active[1])}, ${t("rlist.h3", { h: h3 })} ${pct(r.probs.onset[h3])}, ${t("rlist.h3", { h: hL })} ${pct(r.probs.onset[hL])}`)}">
+        aria-label="${esc(t("rlist.aria", { name: raionName(r.id, r), state: r.live?.active ? t(`live.${r.live.level}`) : t("tip.noAlert"), a: pct(r.probs.active[1]), h: h3, b: pct(r.probs.onset[h3]), hL, c: pct(r.probs.onset[hL]) }))}">
         <span class="rn-main"><span class="rn-name">${r.live?.active ? `<i class="dotsw ${r.live.level === "hromada" ? "part" : ""}"></i>` : `<i class="dotsw off"></i>`}${esc(raionName(r.id, r))}</span>
           ${line(r)}<span class="rn-m">${methods(r)}</span></span>
         ${probCell(r.probs.active[1])}${probCell(r.probs.onset[h3])}${probCell(r.probs.onset[hL])}</button></li>`).join("")}</ul>
@@ -931,16 +982,22 @@ function raionListHTML(oblast) {
 function typesHTML(types) {
   if (!types || !S.forecast?.threats) return "";
   const hs = Object.keys(types).map(Number).sort((a, b) => a - b);
+  // p_onset_type (chance of a new alert within h) x (share of the type) comes with the threat-type forecast
+  const hasOn = (x) => !!x?.p_onset_type && Object.keys(x.p_onset_type).length > 0;
   const block = (h) => {
     const x = types[h];
+    const on = hasOn(x);
     const order = [...S.forecast.threats.types].sort((a, b) => (x.p_type[b.id] || 0) - (x.p_type[a.id] || 0));
     return `<div class="types-h"><b>${t("types.within", { h })}</b>${x.level ? `<span class="lvl ${x.level}">${t(`lvlc.${x.level}`)}</span>` : ""}</div>
-      <table class="probs"><tbody>${order.map((m) => {
+      <table class="probs types"><thead><tr><th scope="col"><span class="sr">${t("ctl.type")}</span></th><th scope="col">${t("types.colShare")}</th>${on ? `<th scope="col" class="on">${t("types.colOnset")}</th>` : ""}</tr></thead>
+      <tbody>${order.map((m) => {
         const p = x.p_type[m.id] || 0;
-        return `<tr><td style="width:46%">${t(`type.${m.id}`)}</td><td><div class="pbar"><div class="track"><div class="fill" style="width:${Math.round(p * 100)}%;background:${m.level === "red" ? css("--alert") : css("--yel")}"></div></div><span class="num">${pct(p)}</span></div></td></tr>`;
+        return `<tr><td class="tname">${t(`type.${m.id}`)}</td><td><div class="pbar"><div class="track"><div class="fill" style="width:${Math.round(p * 100)}%;background:${m.level === "red" ? css("--alert") : css("--yel")}"></div></div><span class="num">${pct(p)}</span></div></td>${on ? `<td class="on">${pctSmall(x.p_onset_type[m.id])}</td>` : ""}</tr>`;
       }).join("")}</tbody></table>`;
   };
-  return `<h3>${t("types.title")}</h3>${hs.map(block).join("")}<p class="small muted">${t("types.note")}</p>`;
+  const anyOn = hs.some((h) => hasOn(types[h]));
+  return `<h3>${t("types.title")}</h3><p class="tsub">${t("types.sub")}</p>${hs.map(block).join("")}
+    <p class="small muted">${t("types.note")}${anyOn ? ` ${t("types.noteOnset")}` : ""}</p>`;
 }
 
 // ---------------------------------------------------------------- statistics (full width, pixel-sized charts)
@@ -969,7 +1026,8 @@ function renderStats(d) {
       `${t("stats.stripNote")} ${done.length ? t("stats.stripScore", { right, n: done.length }) : t("stats.stripWait")}`);
   }
   add("hist", true, t("stats.hist"), (host, o) => histChart(host, d, o),
-    `<span><i style="background:${css("--alert")}"></i>${t("stats.histBar")}</span><span><i style="background:${rampColor(0.5)}"></i>${t("stats.histFc")}</span>`);
+    `<span><i style="background:${css("--alert")}"></i>${t("stats.histBar")}</span><span><i class="fc" style="background:${rampColor(0.5)}"></i>${t("stats.histFc")}</span>`,
+    t("stats.histNote"));
   if (d.daily_minutes?.values?.length) {
     add("cal", true, t("stats.cal"), (host, o) => calendarChart(host, d.daily_minutes, o),
       `<span>${t("stats.calLess")}</span>${[0.12, 0.35, 0.6, 0.85, 1].map((p) => `<i style="background:${rampColor(p)}"></i>`).join("")}<span>${t("stats.calMore")}</span>`,
@@ -1092,7 +1150,8 @@ function histChart(host, d, { w, h, big }) {
   for (const hh of hs) {
     const p = d.probs.active[hh];
     const i = hist.length + hh - 1;
-    el("rect", { x: at(i), y: f.y(p), width: Math.max(bw - 1, 0.8), height: f.y(0) - f.y(p), fill: rampColor(Math.max(0.35, p)), rx: Math.min(2, bw / 4) }, f.svg);
+    el("rect", { x: at(i), y: f.y(p), width: Math.max(bw - 1, 0.8), height: f.y(0) - f.y(p), fill: rampColor(Math.max(0.35, p)), rx: Math.min(2, bw / 4),
+      stroke: css("--ink"), "stroke-width": 1, "stroke-dasharray": "3 2" }, f.svg);
   }
   const xNow = at(hist.length);
   el("line", { x1: xNow, x2: xNow, y1: pad.t - 10, y2: f.y(0), stroke: css("--ink2"), "stroke-dasharray": "4 3" }, f.svg);
@@ -1339,7 +1398,7 @@ async function renderMetrics() {
         <p class="small muted">${t("m.verCounts", { n: ver.n_forecasts_verified ?? "–", runs: ver.n_verified, wait: Math.max(0, (ver.n_issued || 0) - (ver.n_verified || 0)) })}</p>`
         : `<p>${t("m.verNone", { n: ver.n_issued })}</p>`}</div>`;
   }
-  let html = `<h2 style="margin-top:0">${t("m.title")}</h2>${verHTML}
+  let html = `<h2 style="margin-top:0">${t("m.title")}</h2><p class="lead">${t("m.pctNote")}</p>${verHTML}
     ${ho.start ? "" : `<p class="small muted">${t("m.noHoldout")}</p>`}
     <h3 style="margin:24px 0 8px">${t("m.hoTitle")}</h3>
     <p class="lead">${t("m.hoLead", { days: ho.days, from: fmtFull.format(new Date(ho.start)), to: fmtFull.format(new Date(ho.end)) })}</p>
@@ -1462,7 +1521,7 @@ function raionTipHTML(id) {
     return `${head}<br>${r.live.active ? `${t(`live.${r.live.level}`)}${r.live.since ? ", " + duration(r.live.since, liveTo()) : ""}` : t("tip.noAlert")}`;
   }
   const tg = rTarget(), p = r.probs?.[tg]?.[S.horizon];
-  return `${head}<br>${p == null ? "–" : t("tip.prob", { p: pct(p), level: levelWord(p) })}<br><span class="tipsub">${t(`method.${r.method?.[tg]?.[S.horizon]}`)}</span>`;
+  return `${head}<br>${probTip(tg, p, true)}<br><span class="tipsub">${t(`method.${r.method?.[tg]?.[S.horizon]}`)}</span>`;
 }
 
 async function selectRaion(id, { zoom = false } = {}) {
@@ -1547,6 +1606,7 @@ function renderRaionDetail(d) {
       <button type="button" class="zbtn" id="back-oblast">${t("raion.back", { name: esc(oblFull(d.oblast)) })}</button></div>
     <h3>${t("raion.forecast")}</h3>
     <p class="small">${t("raion.from")} ${[...methods].map(mtag).join(" ")}</p>
+    ${pctNote("ex-raion", "raion.note", d.windows, { raion: true })}
     ${probsTable(d, hs)}
     <p class="small muted">${[...methods].map((m) => `${quote(t(`method.${m}`))}: ${t(`methodLong.${m}`)}`).join("<br>")}</p>
     ${cmp}${shareNote}${evHTML}`;
@@ -1564,13 +1624,16 @@ function renderRaionRank() {
   const ob = S.zoomOblast;
   const key = S.layer === "now" ? (r) => (r.live?.active ? 2 : 0) + (r.probs.active[1] ?? 0) : (r) => r.probs[rTarget()][S.horizon] ?? -1;
   const rows = rs.filter((r) => !ob || r.oblast === ob).sort((a, b) => key(b) - key(a));
-  tb.innerHTML = `<thead><tr><th scope="col">${t("rank.raion")}</th><th scope="col">${t("rank.activeH", { h: 1 })}</th><th scope="col">${t("rank.onsetH", { h: h3 })}</th><th scope="col">${t("rank.onsetH", { h: hs[hs.length - 1] })}</th><th scope="col">${t("rank.method")}</th></tr></thead>
+  tb.innerHTML = `<caption class="sr">${t("rank.raions")}: ${t("rank.noteRaions")}</caption><thead>
+    <tr class="grp"><th scope="col" rowspan="2">${t("rank.raion")}</th><th scope="colgroup" colspan="3" class="gs">${t("rank.grpRaion")}</th><th scope="col" rowspan="2" class="gs">${t("rank.method")}</th></tr>
+    <tr><th scope="col" class="gs">${t("rlist.h1")}</th><th scope="col">${t("rlist.h3", { h: h3 })}</th><th scope="col">${t("rlist.h3", { h: hs[hs.length - 1] })}</th></tr></thead>
     <tbody>${rows.map((r) => `<tr data-rid="${r.id}" tabindex="0" class="${r.id === S.rsel ? "sel" : ""}">
       <td>${esc(raionName(r.id, r))}<span class="small muted"> · ${esc(r.oblast === "Kyiv City" ? "" : oblShort(r.oblast))}</span>${r.live?.active ? `<span class="badge">${r.live.level === "hromada" ? t("badge.part") : t("badge.alert")}</span>` : ""}</td>
-      <td>${probCell(r.probs.active[1])}</td><td>${probCell(r.probs.onset[h3])}</td><td>${probCell(r.probs.onset[hs[hs.length - 1]])}</td>
-      <td class="small muted">${t(`method.${r.method.onset[h3]}`)}</td></tr>`).join("")}</tbody>`;
+      <td class="gs">${probCell(r.probs.active[1])}</td><td>${probCell(r.probs.onset[h3])}</td><td>${probCell(r.probs.onset[hs[hs.length - 1]])}</td>
+      <td class="small muted gs">${t(`method.${r.method.onset[h3]}`)}</td></tr>`).join("")}</tbody>`;
   $("#rank-title").textContent = ob ? t("rank.raionsOf", { name: oblFull(ob) }) : t("rank.raions");
   $("#rank-sub").textContent = S.raions?.origin ? t("rank.subRaions", { time: fmtFull.format(new Date(S.raions.origin)) }) : "";
+  $("#rank-note").innerHTML = pctNote("ex-rank", "rank.noteRaions", S.forecast?.windows, { raion: true });
 }
 
 // ---------------------------------------------------------------- views & loading
@@ -1656,6 +1719,23 @@ async function main() {
   $("#rank").addEventListener("click", (ev) => { const tr = ev.target.closest("tr[data-id], tr[data-rid]"); if (tr) pick(tr); });
   $("#rank").addEventListener("keydown", (ev) => { const tr = ev.target.closest("tr[data-id], tr[data-rid]"); if (tr && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); pick(tr); } });
   $("#stats").addEventListener("click", (ev) => { const b = ev.target.closest("button.expand"); if (b) openChart(b.dataset.chart); });
+  const toggleInfo = (b, open) => {
+    const box = document.getElementById(b.getAttribute("aria-controls"));
+    if (!box) return;
+    box.hidden = !open;
+    b.setAttribute("aria-expanded", String(open));
+    if (open) OPEN.add(box.id); else OPEN.delete(box.id);
+  };
+  document.addEventListener("click", (ev) => {
+    const b = ev.target.closest?.("button.info-btn");
+    if (b) toggleInfo(b, b.getAttribute("aria-expanded") !== "true");
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Escape") return;
+    const box = ev.target.closest?.(".explain") || (ev.target.matches?.("button.info-btn[aria-expanded=true]") && document.getElementById(ev.target.getAttribute("aria-controls")));
+    const b = box && document.querySelector(`button.info-btn[aria-controls="${box.id}"]`);
+    if (b) { toggleInfo(b, false); b.focus(); }
+  });
   $("#cd-close").addEventListener("click", () => $("#chart-dialog").close());
   $("#chart-dialog").addEventListener("click", (ev) => { if (ev.target === ev.currentTarget) ev.currentTarget.close(); });
   $("#chart-dialog").addEventListener("close", () => { $("#ctip").hidden = true; });

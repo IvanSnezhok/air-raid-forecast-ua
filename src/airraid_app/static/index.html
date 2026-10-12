@@ -108,6 +108,7 @@
         <h2 id="rank-title" data-i18n="rank.oblasts">All oblasts</h2>
         <span class="muted small" id="rank-sub"></span>
       </div>
+      <div id="rank-note"></div>
       <div class="tablewrap"><table class="rank" id="rank"></table></div>
     </div>
   </section>
@@ -127,13 +128,37 @@
     <p class="note"><strong>Important.</strong> The forecast does not replace official signals. Always respond to the siren
       and to the notifications of the official "Air Alert" app.</p>
 
+    <h3>What is forecast: an air raid alert of any type</h3>
+    <p>The forecast is about the air raid alert itself, whatever the threat behind it: attack drones, cruise missiles,
+      ballistic missiles, guided bombs (KABs) or anything else. An alert declared anywhere in the oblast (for the whole oblast,
+      a raion or a hromada) counts for the oblast. The alert records do not say which threat caused an alert, so there is no
+      separate forecast for drones or missiles; the "Threat type" block is a different, conditional estimate (see below).</p>
+
     <h3>Two answers to two questions</h3>
     <ul>
       <li><strong>Alert in hour N</strong>: will the oblast be under alert for at least part of the N-th hour after the forecast moment
         (for a forecast made at 14:20 the first hour is 14:20–15:20).
         For the first hour this almost always depends on whether an alert is on now.</li>
       <li><strong>New alert within N h</strong>: will a new alert start within the next N hours. This is the harder and
-        more useful question: "should I expect an alert soon?".</li>
+        more useful question: "should I expect an alert soon?". An alert that is already on does not count.</li>
+    </ul>
+
+    <h3>What the percentages mean</h3>
+    <ul>
+      <li><strong>Forecast numbers are probabilities.</strong> "70%" means: of all past forecasts of about 70%, about 7 in 10
+        were followed by an alert, and 3 in 10 were not. The "Model quality" page checks this (the calibration chart).
+        A percentage is not a share of the oblast's territory, not a share of the hour and not how confident the model is.</li>
+      <li><strong>Risk words</strong> are ranges of that probability: low below 15%, moderate 15–39%, high 40–69%,
+        very high 70% or more.</li>
+      <li><strong>History charts</strong> ("The last 72 hours", the calendar, days of the week, a typical day) show what actually
+        happened: how much of each hour or day the oblast was under alert, or the share of days with an alert. In the
+        72-hour chart the bars left of "now" are that share; the bars right of it are the forecast probability.</li>
+      <li><strong>Threat type</strong> ("If an alert starts, what is it likely to be?"): a separate model, based on Air Force
+        messages, estimates which threat the next alert will be about, <em>if</em> one starts. Its percentages add up to 100%
+        across the types and are not the chance of an alert. Where shown, "chance of such an alert" is the chance of a new
+        alert within that time multiplied by the share of the type.</li>
+      <li><strong>Model quality</strong> percentages (for example "+25%") are scores: how much smaller the forecast error is
+        than that of a simple baseline.</li>
     </ul>
 
     <h3>Data</h3>
@@ -203,13 +228,37 @@
     <p class="note"><strong>Важливо.</strong> Прогноз не замінює офіційних сигналів. Завжди реагуйте на сирену
       і сповіщення застосунку «Повітряна тривога».</p>
 
+    <h3>Що прогнозуємо: повітряну тривогу будь-якого типу</h3>
+    <p>Прогноз стосується самої повітряної тривоги, хоч би яка загроза за нею стояла: ударні дрони, крилаті ракети,
+      балістика, керовані авіабомби (КАБ) чи щось інше. Тривога, оголошена будь-де в області (на всю область, на район
+      чи на громаду), рахується для області. Записи тривог не кажуть, яка загроза спричинила тривогу, тому окремого
+      прогнозу для дронів чи ракет немає; блок «Тип загрози» це інша, умовна оцінка (див. нижче).</p>
+
     <h3>Дві відповіді на два питання</h3>
     <ul>
       <li><strong>Тривога в годину N</strong>: чи буде область під тривогою хоча б частину N-ї години від моменту прогнозу
         (для прогнозу від 14:20 перша година це 14:20–15:20).
         На першу годину це майже завжди залежить від того, чи триває тривога зараз.</li>
       <li><strong>Нова тривога протягом N год</strong>: чи почнеться нова тривога в найближчі N годин. Це складніше і
-        корисніше питання: «чи варто чекати тривоги найближчим часом?».</li>
+        корисніше питання: «чи варто чекати тривоги найближчим часом?». Тривога, що вже триває, не рахується.</li>
+    </ul>
+
+    <h3>Що означають відсотки</h3>
+    <ul>
+      <li><strong>Числа прогнозу це ймовірності.</strong> «70%» означає: з усіх минулих прогнозів близько 70% приблизно
+        після 7 з 10 тривога справді була, а після 3 з 10 не було. Це перевіряє сторінка «Якість моделі» (графік калібрування).
+        Відсоток не є часткою території області, часткою години чи тим, наскільки модель упевнена.</li>
+      <li><strong>Слова ризику</strong> це діапазони цієї ймовірності: низька менше 15%, помірна 15–39%, висока 40–69%,
+        дуже висока 70% і більше.</li>
+      <li><strong>Графіки історії</strong> («Останні 72 години», календар, дні тижня, типова доба) показують, що сталося
+        насправді: яку частину кожної години чи доби область була під тривогою, або частку днів з тривогою. На графіку
+        за 72 години стовпчики ліворуч від «зараз» це така частка, праворуч прогнозована ймовірність.</li>
+      <li><strong>Тип загрози</strong> («Якщо тривога почнеться, якою вона найімовірніше буде?»): окрема модель за повідомленнями
+        Повітряних сил оцінює, про яку загрозу буде наступна тривога, <em>якщо</em> вона почнеться. Її відсотки разом дають 100%
+        між типами і не є ймовірністю тривоги. Там, де показано, «ймовірність такої тривоги» це ймовірність нової тривоги
+        за цей час, помножена на частку типу.</li>
+      <li><strong>Відсотки на сторінці «Якість моделі»</strong> (наприклад «+25%») це оцінки якості: наскільки помилка прогнозу
+        менша, ніж у простого орієнтира.</li>
     </ul>
 
     <h3>Дані</h3>
