@@ -47,6 +47,9 @@ class Settings:
     live_refresh_s: int = 60
     data_refresh_h: float = 6.0
     retrain_h: float = 24.0
+    # Text archive (a checkout of the text-data branch): serve the history + Telegram model
+    # when it covers the forecast origin, else the history-only model. None = off.
+    text_root: Path | None = None
     # Run loading/training in a background thread (False in tests).
     background: bool = True
     lgb_threads: int = field(default_factory=lambda: os.cpu_count() or 2)
@@ -68,6 +71,8 @@ class Settings:
             s.state_dir = Path(v)
         if v := env.get("AIRRAID_REPORTS_DIR"):
             s.reports_dir = Path(v)
+        if v := env.get("AIRRAID_TEXT_ROOT"):
+            s.text_root = Path(v)
         if v := env.get("AIRRAID_OFFICIAL_PATH"):
             s.official_path = Path(v)
         if v := env.get("AIRRAID_STORE") or env.get("AIRRAID_STORE_DIR"):  # same variable as predict_now.py

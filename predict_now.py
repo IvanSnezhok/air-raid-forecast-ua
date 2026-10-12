@@ -143,6 +143,25 @@ def append_log(out_long: pd.DataFrame):
     out_long.to_csv(LOG_PATH, index=False)
 
 
+def text_model(args, tgrid, grid, hist_end, k_now):
+    """History + Telegram model (src/airraid/text/serving.py) and its features at the origin.
+
+    Trained on the training grid like the history model; features come from the text
+    archive (fresh posts are fetched into it first). Returns (None, None, reason) when it
+    cannot serve, and the history-only model is used.
+    """
+    from airraid.text.serving import TextServing
+
+    text = TextServing(args.text_root, MODELS_DIR / ("text_replay" if args.as_of else "text"), ROOT / "reports",
+                       threads=args.threads, fetch=not (args.as_of or args.text_no_fetch))
+    if not text.ensure_models(tgrid, hourly_fraction(tgrid), hourly_starts(tgrid), hist_end,
+                              0 if args.as_of else args.retrain_hours):
+        return None, None, f"text model unavailable: {text.status}"
+    rows, status = text.rows_now(grid, k_now)
+    print(f"text signals: {status}")
+    return text, rows, status
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--retrain-hours", type=float, default=24,
@@ -154,6 +173,11 @@ def main():
                     help="point-in-time store (live-data branch checkout): fills the gap after the dataset "
                          "and receives the forecasts")
     ap.add_argument("--threads", type=int, default=int(os.environ.get("AIRRAID_LGB_THREADS", 4)))
+    ap.add_argument("--text-root", type=Path, default=os.environ.get("AIRRAID_TEXT_ROOT") or None,
+                    help="text archive (text-data branch checkout): serve the history + Telegram model "
+                         "when the archive covers the origin, else the history-only model")
+    ap.add_argument("--text-no-fetch", action="store_true",
+                    help="do not fetch new posts first (the pipeline ran `airraid.text.collect update` just before)")
     args = ap.parse_args()
 
     download()
@@ -217,6 +241,11 @@ def main():
     else:
         print(f"reusing models trained on data up to {trained_until}")
 
+    text, text_rows, text_status = None, None, "off (no --text-root)"
+    if args.text_root is not None:
+        text, text_rows, text_status = text_model(args, tgrid, grid, hist_end, k_now)
+    served = set()
+
     issued_at = pd.Timestamp.now(tz="UTC").floor("s")
     sha = git_sha()
     out = pd.DataFrame({"region": grid.regions})
@@ -224,7 +253,11 @@ def main():
     for h in HORIZONS:
         x_now = add_horizon_features(base_now, grid, H, h, S)
         for t, clim_col in (("active", "hod_clim_28d"), ("onset", "onset_clim_28d")):
-            p = models[f"{t}_h{h}"].predict(x_now)
+            if text is not None:
+                p, model_name = text.predict(x_now, t, h, text_rows, fallback=models[f"{t}_h{h}"])
+            else:
+                p, model_name = models[f"{t}_h{h}"].predict(x_now), "lightgbm"
+            served.add(model_name)
             out[f"{t}_{h}h"] = p.round(3)
             # same columns as the web app's ForecastJournal (src/airraid_app/journal.py)
             rows.append(pd.DataFrame({
@@ -232,7 +265,7 @@ def main():
                 "p": p.round(4), "clim": x_now[clim_col].to_numpy().round(4),
                 "issued_at": issued_at, "live": bool(token) or len(gap) > 0,
                 "active_now": x_now["active_now"].to_numpy().astype(int),
-                "trained_until": trained_until, "hist_end": hist_end, "git_sha": sha,
+                "trained_until": trained_until, "hist_end": hist_end, "git_sha": sha, "model": model_name,
             }))
     log = pd.concat(rows, ignore_index=True)
     append_log(log)
@@ -240,7 +273,7 @@ def main():
         store.append(args.store, "forecasts", log)
 
     local = origin.tz_convert("Europe/Kyiv")
-    print(f"\nForecast made at {local:%Y-%m-%d %H:%M} Kyiv time")
+    print(f"\nForecast made at {local:%Y-%m-%d %H:%M} Kyiv time by {', '.join(sorted(served))} (text: {text_status})")
     print("active_Nh: P(alert active during hour N); onset_Nh: P(new alert starts within N hours)\n")
     print(out.sort_values("active_1h", ascending=False).to_string(index=False))
     out.to_csv(ROOT / "reports" / "forecast_now.csv", index=False)
@@ -252,6 +285,8 @@ def main():
         "gap_alerts": int(len(gap)),
         "models_trained_until_utc": f"{trained_until:%Y-%m-%d %H:%M}",
         "live_api": bool(token),
+        "model_served": ",".join(sorted(served)),
+        "text_status": text_status,
     }))
 
 
