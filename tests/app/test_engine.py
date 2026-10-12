@@ -28,7 +28,7 @@ def test_stale_cache_is_rejected(settings, engine, tmp_path):
 def test_live_alerts_change_the_forecast(settings, engine, monkeypatch, tmp_path):
     """An ongoing alert reported by alerts.in.ua must switch on `active_now` for that region."""
     now = engine.hist_end.ceil("h") + pd.Timedelta(minutes=30)
-    started = (now - pd.Timedelta(hours=2)).isoformat()
+    started = (now - pd.Timedelta(minutes=40)).isoformat()  # within LIVE_EXPIRY_HOURS, before the origin
     payload = {"alerts": [{"alert_type": "air_raid", "location_title": "Подільський район", "location_type": "raion",
                            "location_oblast": "Одеська область", "started_at": started}]}
     e = ForecastEngine(type(settings)(**{**vars(settings), "alerts_token": "test", "state_dir": tmp_path}))
@@ -56,7 +56,9 @@ def test_parse_active_ignores_other_alert_types_and_unknown_regions():
     st = live.parse_active(payload, REGIONS, now)
     assert not st.regions["Kharkivska oblast"].active
     assert st.regions["Kyiv City"].active
-    assert st.regions["Kyiv City"].since == pd.Timestamp("2026-10-11 08:50", tz="UTC")
+    # the oblast-level alert starts at the latest activation, like a volunteer record
+    # (airraid.live_alerts.model_alerts), not at the earliest record
+    assert st.regions["Kyiv City"].since == pd.Timestamp("2026-10-11 09:10", tz="UTC")
 
 
 def test_api_failure_falls_back_to_dataset(settings, engine, monkeypatch, tmp_path):
