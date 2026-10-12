@@ -49,7 +49,7 @@ def _cal(active_key, fitted_at, a, b):
     return df
 
 
-def test_pipeline_learns_from_verified_forecasts(settings, tmp_path, fake_now):
+def test_pipeline_learns_from_verified_forecasts(settings, tmp_path, fake_now):  # noqa: F811
     alerts = load_alerts(settings.data_path)
     hist_end = alerts["start"].max()
     root, models = tmp_path / "store", tmp_path / "models"

@@ -18,6 +18,10 @@ def test_build_static_site(settings, tmp_path):
     for reg in json.loads((out / "api" / "regions.json").read_text(encoding="utf-8")):
         assert (out / "api" / "regions" / f"{reg['id']}.json").exists()
     assert not (out / "api" / "threats.json").exists()
+    # the History tab's files (lazy-loaded by the UI)
+    hist = json.loads((out / "api" / "history.json").read_text(encoding="utf-8"))
+    assert {"windows", "blocks", "reliability", "calibration"} <= set(hist)
+    assert "series" in json.loads((out / "api" / "history" / "timeline.json").read_text(encoding="utf-8"))
     assert (out / "static" / "app.js").exists() and (out / "static" / "ukraine-map.json").exists()
     assert (out / "static" / "ukraine-map-detail.json").exists() and (out / "static" / "i18n.js").exists()
     # the "API" paragraph of both language versions points to the JSON files

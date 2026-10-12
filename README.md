@@ -34,6 +34,12 @@ likely to be (shares add up to 100%; not the chance of an alert). Every forecast
 short line saying this and a "?" with the full definition; details and screenshots in
 [`docs/web-app.md`](docs/web-app.md#що-означають-відсотки).
 
+**History tab** (`#history`): every issued forecast checked against what happened (headline
+scores vs climatology and persistence over 24 h / 7 days, skill over time, reliability, an
+hour-by-hour forecast-vs-outcome chart per oblast, the latest checked forecasts) and the state
+of the layer that learns from these checks ("Learning from verified forecasts" below).
+![History tab](docs/img/app-history.png)
+
 ## Quick start
 
 ```bash
