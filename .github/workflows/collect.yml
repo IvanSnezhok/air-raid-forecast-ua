@@ -17,6 +17,10 @@ on:
   schedule:
     - cron: "41 2 * * *"
   workflow_dispatch:
+    inputs:
+      min_age_h:
+        description: "Re-pull oblasts whose history is older than this many hours (pipeline.py history-check passes 1 when the alert record lags)"
+        default: "20"
 
 concurrency:
   group: collect-history
@@ -57,9 +61,10 @@ jobs:
         if: steps.check.outputs.ready == 'true'
         env:
           ALERTS_IN_UA_TOKEN: ${{ secrets.ALERTS_IN_UA_TOKEN }}
+          MIN_AGE_H: ${{ inputs.min_age_h || '20' }}
         run: |
           for i in $(seq 1 12); do
-            python -m airraid.collect history --root "$STORE" --max-requests 15 | tee "$RUNNER_TEMP/history.log"
+            python -m airraid.collect history --root "$STORE" --max-requests 15 --min-age-h "$MIN_AGE_H" | tee "$RUNNER_TEMP/history.log"
             bash .github/scripts/live-data.sh commit "history $(date -u +%FT%H:%MZ)"
             grep -q "^history: 0 requests" "$RUNNER_TEMP/history.log" && break
           done
