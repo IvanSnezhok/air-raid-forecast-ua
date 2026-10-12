@@ -42,6 +42,10 @@
     <div class="summary" id="summary"></div>
 
     <div class="controls">
+      <div class="seg" role="group" aria-label="Одиниці мапи" id="unit" hidden>
+        <button data-v="oblast" aria-pressed="true" title="Мапа областей">Області</button>
+        <button data-v="raion" aria-pressed="false" title="Мапа районів: живий стан і прогноз для кожного району">Райони</button>
+      </div>
       <div class="seg" role="group" aria-label="Шар мапи" id="layer">
         <button data-v="now" aria-pressed="true">Зараз</button>
         <button data-v="forecast" aria-pressed="false">Прогноз</button>
@@ -54,12 +58,21 @@
       <div class="seg" role="group" aria-label="Горизонт" id="horizon" hidden></div>
       <span class="window" id="window"></span>
       <label class="search"><span class="sr">Знайти область</span>
-        <input id="search" list="region-list" placeholder="Знайти область…" autocomplete="off">
+        <input id="search" list="region-list" placeholder="Знайти область або район…" autocomplete="off">
         <datalist id="region-list"></datalist></label>
     </div>
 
     <div class="grid">
       <div class="card mapcard">
+        <div class="zoombar" id="zoombar" hidden>
+          <button type="button" class="zbtn primary" id="zoom-alerts" title="Наблизити мапу до районів, де зараз тривога">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="M12.6 12.6 17 17M8.5 6v5M6 8.5h5"/></svg>До тривог</button>
+          <label class="zsel"><span class="sr">Область для наближення</span>
+            <select id="zoom-oblast"><option value="">усі області</option></select></label>
+          <button type="button" class="zbtn" id="zoom-reset" title="Показати всю мапу" disabled>
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 8V3h5M17 8V3h-5M3 12v5h5M17 12v5h-5"/></svg>Уся мапа</button>
+          <span class="zinfo muted small" id="zoom-info" aria-live="polite"></span>
+        </div>
         <div class="mapwrap">
           <svg id="map" role="img" aria-label="Мапа областей України"></svg>
           <div id="tip" class="tip" hidden></div>
@@ -110,7 +123,17 @@
       <li>Поточний стан: <a href="https://alerts.in.ua" rel="noopener">alerts.in.ua</a>, якщо сервер має токен API.
         Тривога в будь-якому районі чи громаді позначає всю область, як і в історичних даних.
         Без токена показано стан на кінець датасету.</li>
+      <li>Райони: історія тривог по районах з «офіційного» файлу того самого репозиторію (оновлювався до 7 вересня 2026)
+        і записи alerts.in.ua. Межі районів: OCHA/HDX COD-AB (ДНВП «Картографія», CC BY-IGO).</li>
     </ul>
+
+    <h3>Райони</h3>
+    <p>Шар «Райони» показує, які райони під тривогою зараз (тривога на всю область, на район або лише на окремі громади району)
+      і прогноз для кожного району. Кнопка «До тривог» наближає мапу до районів під тривогою: усіх або в обраній області.</p>
+    <p>Прогноз для району позначено, звідки він: <strong>модель району</strong> (окрема модель на районних даних, потребує
+      районної історії за останні 28 днів), <strong>область × частка району</strong> (ймовірність тривоги в області,
+      помножена на те, яку частку тривог області за 28 днів мав цей район) або <strong>прогноз області</strong>, коли районних
+      даних немає. Як ці способи показали себе на останніх чотирьох тижнях з районними даними, видно в деталях району.</p>
 
     <h3>Модель</h3>
     <p>Для кожної пари «ціль × горизонт» навчається окремий градієнтний бустинг (LightGBM) на останніх місяцях історії.

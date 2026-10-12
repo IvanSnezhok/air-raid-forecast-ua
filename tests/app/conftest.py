@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
+from airraid.raions import forecastable, oblast_raions
 from airraid_app.api import create_app
 from airraid_app.config import Settings
 from airraid_app.engine import ForecastEngine
@@ -32,11 +33,46 @@ def synthetic_alerts(days: int = 75, seed: int = 0) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["region", "started_at", "finished_at", "naive"])
 
 
+def synthetic_official(alerts: pd.DataFrame, end: pd.Timestamp | None = None, seed: int = 1) -> pd.DataFrame:
+    """Official-file-like raion records: each oblast alert lights up a random subset of its raions.
+
+    The first raion of each oblast is hit far more often than the last, a few
+    records are hromada-level, and some raion alerts have no oblast alert at all
+    (the two real files disagree too). `end` cuts the file like the real one,
+    which stopped updating.
+    """
+    rng = np.random.default_rng(seed)
+    rows = []
+    for a in alerts.itertuples(index=False):
+        if end is not None and a.started_at >= end:
+            continue
+        if a.region == "Kyiv City":
+            rows.append(("Kyiv City", None, None, "oblast", a.started_at, a.finished_at))
+            continue
+        raions = [r for r in oblast_raions(a.region) if forecastable(r)]
+        weights = np.linspace(0.9, 0.15, len(raions))
+        for r, w in zip(raions, weights):
+            if rng.random() < w:
+                s = a.started_at + pd.Timedelta(minutes=int(rng.integers(0, 4)))
+                level = "hromada" if rng.random() < 0.1 else "raion"
+                rows.append((a.region, r.name, "Test hromada" if level == "hromada" else None, level, s, a.finished_at))
+        if rng.random() < 0.1:  # a raion alert the volunteer file does not have
+            s = a.started_at + pd.Timedelta(hours=5)
+            rows.append((a.region, raions[0].name, None, "raion", s, s + pd.Timedelta(minutes=30)))
+    df = pd.DataFrame(rows, columns=["oblast", "raion", "hromada", "level", "started_at", "finished_at"])
+    df["source"] = "official"
+    return df
+
+
 @pytest.fixture(scope="session")
 def settings(tmp_path_factory) -> Settings:
     d = tmp_path_factory.mktemp("app")
     path = d / "alerts.csv"
-    synthetic_alerts().to_csv(path, index=False)
+    alerts = synthetic_alerts()
+    alerts.to_csv(path, index=False)
+    official = d / "official.csv"
+    # stops 10 days before the volunteer history ends, like the real official file
+    synthetic_official(alerts, end=alerts["started_at"].max() - pd.Timedelta(days=10)).to_csv(official, index=False)
     types = d / "type_forecast_now.csv"
     rows = []
     for r in REGIONS[:3]:  # one region without a type forecast on purpose
@@ -47,7 +83,8 @@ def settings(tmp_path_factory) -> Settings:
     pd.DataFrame(rows).to_csv(types, index=False)
     (d / "type_forecast_meta.json").write_text('{"origin_utc": "2026-09-13 10:00"}')
     return Settings(
-        data_path=path, model_dir=d / "models", state_dir=d / "state", reports_dir=d / "reports", download=False,
+        data_path=path, official_path=official, model_dir=d / "models", state_dir=d / "state", reports_dir=d / "reports",
+        download=False,
         train_months=1, n_trees=20, type_forecast=str(types), holdout_days=3, background=False, lgb_threads=2,
     )
 

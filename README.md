@@ -12,6 +12,9 @@ hour T:
 | `active` | Will an alert be active at any moment of hour *T+h*? | what a person planning the next hours cares about |
 | `onset`  | Will a **new** alert start within the next *h* hours? | harder and more useful: the "active" target is inflated by alerts that are already running |
 
+A **raion (district) layer** adds which raions are under alert now and a 1–6 h forecast for
+each of the 119 raions with data, evaluated on its own: see [Raion level](#raion-level-districts).
+
 ## Quick start
 
 ```bash
@@ -21,6 +24,10 @@ python run.py               # full evaluation: model selection + 4-week walk-for
 python run.py --reuse-selection   # skip model selection, reuse reports/selection.json
 python predict_now.py       # live forecast for the next 6 hours (+ appends to the forecast log)
 python verify.py            # score logged forecasts once their horizon has passed
+
+# raion level (see "Raion level"): evaluation, latest-weeks check, static site with raions
+python raion_run.py --threads 2             # → reports/raions/ (about 1 h on 4 cores)
+python raion_latest.py --store live-data    # latest 4 weeks with alerts.in.ua labels
 
 # with the point-in-time store (a checkout of the `live-data` branch, see "Live data")
 git worktree add live-data origin/live-data
@@ -280,6 +287,205 @@ became known). Files are never rewritten, so git grows only by new rows.
   two polls are missing until the daily history pull. Dataset labels replace store
   labels once the dataset covers the window.
 
+## Raion level (districts)
+
+The web map can switch from oblasts to **raions** (the 136 districts after the 2020
+reform, plus Kyiv City and Sevastopol): which raions are under alert right now (the
+whole raion, or only some of its hromadas), a 1–6 h forecast for every raion, and a
+**"До тривог"** button that zooms the map to the raions under alert, in all oblasts or in
+one. Clicking a raion opens its live state and forecast, with the method behind every
+number. Screenshots and API: [`docs/web-app.md`](docs/web-app.md#райони).
+
+![raions under alert](docs/img/app-raions-now.png)
+![raion panel: forecast, method and its test quality](docs/img/app-raion-detail.png)
+
+### Geometry and names
+
+* `scripts/build_map.py --only raions` → `src/airraid_app/static/raions-map.json`
+  (370 KB, 127 KB gzipped) from the OCHA/HDX **COD-AB** boundaries of Ukraine, v05, valid
+  on 2025-09-01 (State Scientific Production Enterprise "Kartographia", **CC BY-IGO**,
+  [`raions-map.LICENSE.txt`](src/airraid_app/static/raions-map.LICENSE.txt)). Neighbours
+  share their border vertices, so borders are cut into arcs and every arc is simplified
+  once (as TopoJSON does): no gaps or slivers between raions. The Chornobyl exclusion zone
+  is drawn as part of Vyshhorodskyi raion, which it belongs to since 2020.
+* `src/airraid/raions.py`: one row per unit with the HDX pcode, the oblast, the English
+  name of the official alert file and the Ukrainian title and location UID of
+  alerts.in.ua. **Mapping completeness** (`tests/app/test_raion_map.py`): all 118 raions of the
+  official file (three renamed since: Krasnohradskyi → Berestynskyi, Chervonohradskyi →
+  Sheptytskyi, Volodymyr-Volynskyi → Volodymyrskyi), all 126 alerts.in.ua raion UIDs,
+  all 1,469 alerts.in.ua hromadas (through their raion) and the 7 city-level UIDs seen in
+  the alerts.in.ua history (Kharkiv, Dnipro, Kryvyi Rih, Nikopol, Marhanets,
+  Zaporizhzhia, Svitlovodsk). **Unmatched: none.** Not forecast, drawn as "no data":
+  Crimea (10 raions; one location in alerts.in.ua), Sevastopol and Luhansk oblast (8
+  raions; permanent alert since 2022, excluded from the oblast model too).
+
+### Raion-level history
+
+* **Official file** of the same upstream repo (`official_data_en.csv`, oblast / raion /
+  hromada records, 2022-03-15 → 2026-09-07 05:00 UTC, then it stopped updating) and the
+  **alerts.in.ua history** in the point-in-time store (`live-data`, from 2026-09-12 on,
+  pulled per oblast; see "Live data"). Between them, 7–12 Sep 2026 is a gap that is
+  tracked as such, never treated as "no alerts".
+* `src/airraid/raion_data.py` maps every record to the raions it covers: an oblast-level
+  record → every raion of the oblast, a raion record → that raion, a hromada or city
+  record → its raion (only part of it, but that is what a resident sees). Same cleaning
+  as the oblast data: zero-length records dropped, **12 h cap** (frontline records that
+  stay open for weeks count as over after 12 h, live and in training alike).
+* **Coverage** (`reports/raions/coverage.csv`): every oblast except Luhansk has raion-level
+  declarations; at least 90 % of its records have been below oblast level since
+  **Aug 2025** (Kharkivska, Kyivska, Poltavska), **Sep 2025** (Chernihivska,
+  Dnipropetrovska, Khmelnytska, Kirovohradska, Sumska) or **Nov 2025** (the other 15).
+  Before that most alerts were oblast-wide, so every raion of the oblast counts as under
+  alert. Kyiv City is one unit. The official file has no records for Ivano-Frankivska,
+  Lvivska and Zakarpatska after 2026-08-07 (quiet weeks there, or a gap in the file);
+  the volunteer file has 154 Lvivska alerts over 10 Aug – 7 Sep.
+* **The two files disagree about "an alert in the oblast"** (`reports/raions/
+  agreement.csv`, minutes of 10 Aug – 6 Sep 2026): in Dnipropetrovska, Kharkivska, Sumska
+  and Zaporizka some raion is under an official alert 71–84 % of the time, the volunteer
+  oblast alert only 13–24 %; in Lvivska and Volynska the volunteer file has an alert
+  ~15 % of the time while official raion alerts cover < 0.3 %. A raion forecast cannot
+  just reuse the oblast probability; this is handled below by learning the raion's own
+  labels and by a ratio estimator for the share.
+
+### Method
+
+`raion_run.py` (same protocol as `run.py`): the last 4 weeks with official raion data
+(origins 2026-08-09 19:00 → 2026-09-06 19:00 UTC) as the test, the 4 weeks before as
+validation, weekly refits, 6-hour embargo, 119 units (118 raions + Kyiv City). Targets as
+for oblasts (`active`: raion under alert in hour T+h; `onset`: a new raion alert within h
+hours). Compared:
+
+| method | what it is | needs at forecast time |
+|---|---|---|
+| `climatology_28d` | raion's same-hour share of the last 28 days (skill reference) | 28 days of raion history |
+| `persistence` | 0/1: raion under alert now / alert started in the last h hours | current raion state |
+| `oblast` | the oblast model's probability, as is (refit at each fold exactly as served) | nothing raion-level |
+| `oblast_x_share` | oblast probability × the raion's trailing 28-day ratio of raion events to (volunteer) oblast events; the ratio estimator absorbs the definitional mismatch (calibrated on average) | a share from some 28 days of raion history |
+| `oblast_x_share_stale30` | the same with the share estimated 30 days earlier (how a stale share degrades) | as above |
+| `lightgbm_state` | raion LightGBM on what one alerts.in.ua poll gives: which raions are under alert now and for how long, share of the other raions of the oblast and of the bordering raions under alert, the volunteer oblast's state and recent history, calendar | **current raion state only** |
+| `lightgbm` | the same plus 28 days of raion history (lags, counts, same-hour climatology) | 28 days of raion history |
+
+What can run live depends on the data at hand, so the validation month picks the best
+method for three tiers: **history** (the store covers the last 29 days), **live_state** (a
+poll, no recent history), **none** (no live raion data). The app serves the tier's choice
+and falls back down the list when an input is missing. Kyiv City is one unit but is treated
+like a raion: its raion target is the official city alert, and the raion models beat the
+oblast model there too. Every value in `/api/raions` carries its method, and the UI shows it.
+
+### Results
+
+**Test 1: official raion file, latest 4 weeks it covers** (origins 2026-08-09 19:00 →
+2026-09-06 19:00 UTC, 119 units, ~80 k forecasts per target and horizon; full tables
+[`reports/raions/metrics_test.md`](reports/raions/metrics_test.md)). Brier score, in
+brackets the skill vs the raion's 28-day same-hour climatology:
+
+| target, horizon | climatology | oblast forecast as is | oblast × share | **raion model, current state** | **raion model + 28-day history** |
+|---|---|---|---|---|---|
+| active 1 h | 0.140 | 0.204 (−46 %) | 0.169 (−21 %) | **0.060 (+57 %)** | **0.057 (+59 %)** |
+| active 3 h | 0.140 | 0.174 (−24 %) | 0.153 (−9 %) | 0.101 (+28 %) | **0.097 (+31 %)** |
+| active 6 h | 0.140 | 0.171 (−22 %) | 0.153 (−9 %) | 0.112 (+20 %) | **0.111 (+21 %)** |
+| onset 1 h | 0.087 | 0.119 (−36 %) | 0.088 (−1 %) | 0.076 (+13 %) | **0.074 (+16 %)** |
+| onset 3 h | 0.152 | 0.228 (−50 %) | 0.154 (−1 %) | 0.132 (+13 %) | **0.124 (+18 %)** |
+| onset 6 h | 0.166 | 0.259 (−56 %) | 0.168 (−1 %) | 0.139 (+16 %) | **0.131 (+21 %)** |
+
+Base rates: active 28 %, onset 10 % / 25 % / 37 % (1 / 3 / 6 h). ROC-AUC of the raion
+models 0.85–0.97. A less noisy baseline, the raion's event rate over the last 28 days at
+any hour (`rate_28d`), is only 1–3 % better than the same-hour climatology, so the skill is
+not an artefact of a noisy reference. The share is worse when it is 30 days stale (onset
+−3 to −5 %). Reliability curves of both raion models sit on the diagonal
+([`reports/raions/figures/reliability.png`](reports/raions/figures/reliability.png)).
+
+**Test 2: the latest 4 weeks, labels from alerts.in.ua** (`raion_latest.py`, origins
+2026-09-13 23:00 → 2026-10-10 23:00 UTC, the same weeks as the oblast model's test,
+77 k forecasts per target and horizon; [`reports/raions/latest_metrics.md`](reports/raions/latest_metrics.md)).
+Only methods that need no 28-day raion history can run here (7–12 Sep is a gap); the
+reference is the same-hour climatology over the days of the last 28 that have raion data.
+The current-state model is refit weekly on everything known before the fold (official
+file + store):
+
+| target, horizon | climatology (available days) | oblast forecast as is | oblast × share | **raion model, current state** |
+|---|---|---|---|---|
+| active 1 h | 0.160 | 0.221 (−38 %) | 0.198 (−24 %) | **0.085 (+47 %)** |
+| active 3 h | 0.160 | 0.194 (−22 %) | 0.182 (−14 %) | **0.139 (+13 %)** |
+| active 6 h | 0.160 | 0.195 (−22 %) | 0.185 (−16 %) | **0.150 (+6 %)** |
+| onset 1 h | 0.124 | 0.147 (−19 %) | 0.123 (+1 %) | **0.112 (+10 %)** |
+| onset 3 h | 0.177 | 0.223 (−26 %) | 0.177 (0 %) | **0.168 (+5 %)** |
+| onset 6 h | 0.166 | 0.218 (−32 %) | 0.163 (+1 %) | **0.161 (+3 %)** |
+
+**What this means, honestly**
+
+* **The oblast probability is not a raion forecast.** Used as is it is worse than the
+  raion's own climatology at every horizon (−19 % to −56 %), mostly because the volunteer
+  oblast alert and official raion alerts are different events (see the mismatch above).
+  Multiplying by the raion's share fixes the calibration on average but adds no skill.
+* **A raion model is clearly better.** In the current-state model the gain (LightGBM
+  "gain", top 30 features) goes to the raion's identity, i.e. a learnt per-raion base rate
+  and its interactions (43 %), to whether the raion is under alert now and for how long
+  (22 %), to the oblast's recent activity from the volunteer file (~16 %) and to how many
+  raions nationwide and next door are under alert (~7 %); the other raions of the same
+  oblast add < 1 % once the neighbours are known. The 28-day-rate baseline barely beats the
+  climatology, so the base rate alone does not explain the skill
+  ([`reports/raions/feature_importance_top30.csv`](reports/raions/feature_importance_top30.csv)).
+* **28 days of raion history add a little** (onset +3 to +5 points over the current-state
+  model) but are rarely available live, because the store must cover the last 29 days
+  without gaps. The current-state model needs one poll, so it is what normally serves.
+* **On the latest weeks the gain is smaller** (onset +3 to +10 %, active +6 to +47 %): the
+  model learnt mostly from the official file, alerts.in.ua records include city-level
+  and long frontline alerts, and alert activity was higher (active base rate 39 % vs 28 %).
+  It is still better than every alternative at every horizon.
+* **Where raion data is thin:** Ivano-Frankivska, Lvivska and Zakarpatska had almost no
+  official raion alerts in the test weeks (skill undefined); the per-oblast numbers are in
+  [`reports/raions/by_oblast.csv`](reports/raions/by_oblast.csv) and
+  [`latest_by_oblast.csv`](reports/raions/latest_by_oblast.csv). Without any live raion
+  data the app falls back to oblast × share and says so in the panel; that fallback is
+  worse than climatology for `active` (see the tables), which is stated next to it.
+
+**What serves which raion forecast** (validation month, chosen per data tier; identical for
+all targets and horizons):
+
+| data at forecast time | method served |
+|---|---|
+| store covers the last 29 days (+ live poll) | raion model + 28-day history |
+| live alerts.in.ua poll (token) | raion model, current state |
+| neither | oblast forecast × the raion's share (period shown) |
+
+The validation numbers that drove the choice are optimistic for the LightGBM models (early
+stopping on the same month); the test numbers above are not.
+
+### No leakage at raion level
+
+* Same construction as the oblast features: at origin T only minutes before T, plus which
+  raions are under alert at T and since when; the end of a running alert is never used.
+  Raion and volunteer records are cut at T (`raion_data.alerts_as_of`); store rows are
+  taken as known at T (`store.load(as_of=T)`); shares use only label windows that end by T.
+* `tests/test_raion_leakage.py` (real data): for random origins in 2026 every raion feature
+  and the trailing share are rebuilt from data cut at T and must equal the full-data
+  values. Two injected leaks make it fail (the hour starting at T as a feature; a share
+  over label windows not finished at T). `tests/app/test_raions.py` has an offline twin
+  that CI runs.
+* Training never sees live data (as for the oblast model): the raion models learn from the
+  raion history and the volunteer dataset only, and stop where both end.
+
+### Commands
+
+```bash
+python scripts/build_map.py --only raions   # raion geometry + neighbour list (outputs committed)
+python raion_run.py --threads 2             # official-file walk-forward → reports/raions/ (~1–2 h on 4 cores)
+git worktree add live-data origin/live-data
+python raion_latest.py --store live-data    # latest 4 weeks with alerts.in.ua labels → reports/raions/latest_*
+AIRRAID_STORE=live-data python scripts/build_static_site.py site   # site incl. api/raions*.json
+```
+
+The web app reads `reports/raions/summary.json` for the chosen methods and plans; without
+it, it serves the current-state model with defaults. `AIRRAID_STORE` (same variable as
+`predict_now.py`) adds the store's raion history; `ALERTS_IN_UA_TOKEN` gives the live
+raion state; `AIRRAID_RAION_MODELS=0` skips raion model training on small hosts.
+`RaionForecaster.save(dir)` / `load_saved(dir)` persist the raion models and shares, so a
+separate job can train them and a site build can serve them without training
+(`AIRRAID_RAION_TRAIN=0`, models from `AIRRAID_RAION_MODEL_DIR`, default
+`<AIRRAID_MODEL_DIR>/raions`; without saved models the raion forecast is oblast × share,
+labelled `models_source: "none"` in `/api/raions`).
+
 ## Learning loop (live)
 
 * `predict_now.py` forecasts the next 6 hours for every region and appends each forecast
@@ -330,8 +536,12 @@ became known). Files are never rewritten, so git grows only by new rows.
   the default branch.
 * No threat type: the alert data does not say *why* an alert was declared (drones,
   missiles, ballistic). Telegram monitoring channels could add this; see `text-features/`.
-* Oblast level only. Since December 2025 real alerts are often per district, so an
-  oblast "alert" here means "an alert somewhere in the oblast".
+* The oblast model is oblast level: since December 2025 real alerts are mostly per
+  district, so an oblast "alert" means "an alert somewhere in the oblast". Raion forecasts
+  come from the separate raion layer ("Raion level"), with its own limits: no raion data
+  for 7–12 Sep 2026; the full raion model needs the store to cover 29 days without gaps;
+  raions of Crimea, Sevastopol and Luhansk oblast are not forecast; a hromada alert marks
+  its raion as (partly) under alert, both in the targets and on the map.
 * Regime shifts (new attack tactics, seasons) are handled only by retraining.
 
 ## Repository layout
@@ -339,7 +549,9 @@ became known). Files are never rewritten, so git grows only by new rows.
 ```
 src/airraid/   data.py (load, clean, minute grid) · features.py · models.py · evaluate.py
                live_alerts.py (alerts.in.ua parsing, live definition) · store.py · collect.py
+               raions.py (raion registry, names, UIDs) · raion_data.py · raion_features.py
 run.py         evaluation pipeline → reports/
+raion_run.py · raion_latest.py   raion forecast evaluation → reports/raions/
 predict_now.py live forecast + forecast log
 verify.py      forecast verification
 scripts/live_definition_check.py   live definition vs the training data

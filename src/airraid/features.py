@@ -67,8 +67,13 @@ def origin_hours(grid: AlertGrid, start: pd.Timestamp, end: pd.Timestamp) -> np.
     return np.arange(k0, k1, dtype=np.int64)
 
 
-def build_features(grid: AlertGrid, K: np.ndarray, H: np.ndarray | None = None) -> pd.DataFrame:
-    """Features for every (origin hour in K, region). Horizon-independent part."""
+def build_features(grid: AlertGrid, K: np.ndarray, H: np.ndarray | None = None, spatial: bool = True) -> pd.DataFrame:
+    """Features for every (origin hour in K, region). Horizon-independent part.
+
+    `spatial=False` leaves out the per-region state columns (now__*, lag1__*), which
+    the raion model replaces with oblast and neighbour aggregates (119 raions would
+    add 238 columns).
+    """
     if H is None:
         H = hourly_fraction(grid)
     R = len(grid.regions)
@@ -122,7 +127,7 @@ def build_features(grid: AlertGrid, K: np.ndarray, H: np.ndarray | None = None) 
     # Spatial picture: state of every other region (lets the model learn which
     # regions "lead" which, instead of us hand-coding a neighbour map).
     lag1 = H[:, K - 1]
-    for j, reg in enumerate(grid.regions):
+    for j, reg in enumerate(grid.regions if spatial else []):
         key = reg.replace(" oblast", "").replace(" ", "_")
         cols[f"now__{key}"] = np.broadcast_to(now[j].astype(np.float32), (R, len(K)))
         cols[f"lag1__{key}"] = np.broadcast_to(lag1[j], (R, len(K)))
