@@ -1,10 +1,19 @@
 <!doctype html>
-<html lang="uk">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Прогноз повітряних тривог</title>
-<meta name="description" content="Поточні повітряні тривоги і ймовірнісний прогноз на 1-6 годин по областях України">
+<title>Air raid alert forecast</title>
+<meta name="description" content="Current air raid alerts in Ukraine and a probabilistic 1-6 hour forecast by oblast and raion">
+<script>
+  // language before first paint: ?lang=uk|en, then the viewer's last choice, else English
+  (function () {
+    var l = null;
+    try { l = new URLSearchParams(location.search).get("lang"); } catch (e) { /* ignore */ }
+    if (l !== "uk" && l !== "en") { try { l = localStorage.getItem("lang"); } catch (e) { l = null; } }
+    document.documentElement.lang = l === "uk" ? "uk" : "en";
+  })();
+</script>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%23c2302e'/%3E%3Cpath d='M16 8v9' stroke='white' stroke-width='3.5' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='23' r='2.2' fill='white'/%3E%3C/svg%3E">
 <link rel="manifest" href="static/manifest.webmanifest">
 <meta name="theme-color" content="#1c1b19">
@@ -16,15 +25,21 @@
   <div class="brand">
     <span class="dot" aria-hidden="true"></span>
     <div>
-      <h1>Повітряні тривоги</h1>
-      <p class="tag">Що відбувається зараз і що очікувати в найближчі години</p>
+      <h1 data-i18n="brand.title">Air raid alerts</h1>
+      <p class="tag" data-i18n="brand.tag">What is happening now and what to expect in the next hours</p>
     </div>
   </div>
-  <nav class="tabs" aria-label="Розділи">
-    <a href="#map" data-view="map">Мапа</a>
-    <a href="#metrics" data-view="metrics">Якість моделі</a>
-    <a href="#about" data-view="about">Як це працює</a>
-  </nav>
+  <div class="topnav">
+    <nav class="tabs" aria-label="Sections" data-i18n-attr="aria-label:nav.label">
+      <a href="#map" data-view="map" data-i18n="nav.map">Map</a>
+      <a href="#metrics" data-view="metrics" data-i18n="nav.metrics">Model quality</a>
+      <a href="#about" data-view="about" data-i18n="nav.about">How it works</a>
+    </nav>
+    <div class="seg lang" id="lang" role="group" aria-label="Language / Мова">
+      <button type="button" data-setlang="en" aria-pressed="true" lang="en" title="English">EN</button>
+      <button type="button" data-setlang="uk" aria-pressed="false" lang="uk" title="Українська">UK</button>
+    </div>
+  </div>
 </header>
 
 <div id="banner" class="banner" hidden></div>
@@ -32,9 +47,9 @@
 <main>
   <section id="loading" class="loading" hidden>
     <div class="spinner" aria-hidden="true"></div>
-    <h2>Модель готується</h2>
-    <p id="loading-msg">Запуск</p>
-    <p class="muted">Перше навчання займає кілька хвилин. Сторінка оновиться сама.</p>
+    <h2 data-i18n="load.title">The model is getting ready</h2>
+    <p id="loading-msg" data-i18n="load.starting">Starting</p>
+    <p class="muted" data-i18n="load.note">The first training takes a few minutes. The page will refresh by itself.</p>
   </section>
 
   <section id="view-map" class="view" hidden>
@@ -42,53 +57,55 @@
     <div class="summary" id="summary"></div>
 
     <div class="controls">
-      <div class="seg" role="group" aria-label="Одиниці мапи" id="unit" hidden>
-        <button data-v="oblast" aria-pressed="true" title="Мапа областей">Області</button>
-        <button data-v="raion" aria-pressed="false" title="Мапа районів: живий стан і прогноз для кожного району">Райони</button>
+      <div class="seg" role="group" aria-label="Map units" data-i18n-attr="aria-label:ctl.unit" id="unit" hidden>
+        <button data-v="oblast" aria-pressed="true" data-i18n="ctl.oblasts" data-i18n-attr="title:ctl.oblastsTitle">Oblasts</button>
+        <button data-v="raion" aria-pressed="false" data-i18n="ctl.raions" data-i18n-attr="title:ctl.raionsTitle">Raions</button>
       </div>
-      <div class="seg" role="group" aria-label="Шар мапи" id="layer">
-        <button data-v="now" aria-pressed="true">Зараз</button>
-        <button data-v="forecast" aria-pressed="false">Прогноз</button>
+      <div class="seg" role="group" aria-label="Map layer" data-i18n-attr="aria-label:ctl.layer" id="layer">
+        <button data-v="now" aria-pressed="true" data-i18n="ctl.now">Now</button>
+        <button data-v="forecast" aria-pressed="false" data-i18n="ctl.forecast">Forecast</button>
       </div>
-      <div class="seg" role="group" aria-label="Що прогнозуємо" id="target" hidden>
-        <button data-v="active" aria-pressed="true" title="Тривога триватиме хоча б частину цієї години">Тривога в годину</button>
-        <button data-v="onset" aria-pressed="false" title="Почнеться нова тривога протягом цього часу">Нова тривога</button>
-        <button data-v="type" aria-pressed="false" hidden title="Ймовірний тип загрози і рівень (жовтий/червоний)">Тип загрози</button>
+      <div class="seg" role="group" aria-label="What is forecast" data-i18n-attr="aria-label:ctl.target" id="target" hidden>
+        <button data-v="active" aria-pressed="true" data-i18n="ctl.active" data-i18n-attr="title:ctl.activeTitle">Alert in the hour</button>
+        <button data-v="onset" aria-pressed="false" data-i18n="ctl.onset" data-i18n-attr="title:ctl.onsetTitle">New alert</button>
+        <button data-v="type" aria-pressed="false" hidden data-i18n="ctl.type" data-i18n-attr="title:ctl.typeTitle">Threat type</button>
       </div>
-      <div class="seg" role="group" aria-label="Горизонт" id="horizon" hidden></div>
+      <div class="seg" role="group" aria-label="Horizon" data-i18n-attr="aria-label:ctl.horizon" id="horizon" hidden></div>
       <span class="window" id="window"></span>
-      <label class="search"><span class="sr">Знайти область</span>
-        <input id="search" list="region-list" placeholder="Знайти область або район…" autocomplete="off">
+      <label class="search"><span class="sr" data-i18n="ctl.searchLabel">Find an oblast or raion</span>
+        <input id="search" list="region-list" placeholder="Find an oblast or raion…" data-i18n-attr="placeholder:ctl.search" autocomplete="off">
         <datalist id="region-list"></datalist></label>
     </div>
 
     <div class="grid">
       <div class="card mapcard">
-        <div class="zoombar" id="zoombar" hidden>
-          <button type="button" class="zbtn primary" id="zoom-alerts" title="Наблизити мапу до районів, де зараз тривога">
-            <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="M12.6 12.6 17 17M8.5 6v5M6 8.5h5"/></svg>До тривог</button>
-          <label class="zsel"><span class="sr">Область для наближення</span>
-            <select id="zoom-oblast"><option value="">усі області</option></select></label>
-          <button type="button" class="zbtn" id="zoom-reset" title="Показати всю мапу" disabled>
-            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 8V3h5M17 8V3h-5M3 12v5h5M17 12v5h-5"/></svg>Уся мапа</button>
+        <div class="zoombar" id="zoombar">
+          <button type="button" class="zbtn primary" id="zoom-alerts" hidden data-i18n-attr="title:zoom.alertsTitle">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="M12.6 12.6 17 17M8.5 6v5M6 8.5h5"/></svg><span data-i18n="zoom.alerts">To alerts</span></button>
+          <label class="zsel"><span class="sr" data-i18n="zoom.oblastLabel">Oblast to zoom to</span>
+            <select id="zoom-oblast"><option value="" data-i18n="zoom.all">all oblasts</option></select></label>
+          <button type="button" class="zbtn" id="zoom-reset" data-i18n-attr="title:zoom.resetTitle" disabled>
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 8V3h5M17 8V3h-5M3 12v5h5M17 12v5h-5"/></svg><span data-i18n="zoom.reset">Whole map</span></button>
           <span class="zinfo muted small" id="zoom-info" aria-live="polite"></span>
         </div>
         <div class="mapwrap">
-          <svg id="map" role="img" aria-label="Мапа областей України"></svg>
+          <svg id="map" role="group" aria-label="Map of Ukraine"></svg>
           <div id="tip" class="tip" hidden></div>
         </div>
         <div class="legend" id="legend"></div>
         <p class="attr" id="attr"></p>
       </div>
 
-      <aside class="card detail" id="detail">
-        <p class="muted">Оберіть область на мапі або в списку, щоб побачити деталі.</p>
+      <aside class="card detail" id="detail" aria-live="polite">
+        <p class="muted" data-i18n="detail.pick">Pick an oblast on the map or in the list to see the details.</p>
       </aside>
     </div>
 
+    <section class="card stats" id="stats" hidden aria-label="Statistics" data-i18n-attr="aria-label:stats.label"></section>
+
     <div class="card">
       <div class="card-h">
-        <h2 id="rank-title">Усі області</h2>
+        <h2 id="rank-title" data-i18n="rank.oblasts">All oblasts</h2>
         <span class="muted small" id="rank-sub"></span>
       </div>
       <div class="tablewrap"><table class="rank" id="rank"></table></div>
@@ -100,9 +117,86 @@
   </section>
 
   <section id="view-about" class="view prose" hidden>
+    <div data-lang="en" lang="en">
+    <h2>How it works</h2>
+    <p>The service shows where an air raid alert is on right now and estimates the probability of an alert
+      in every oblast and raion 1, 2, 3 and 6 hours ahead. The data and the forecast are refreshed every 10 minutes:
+      each forecast is made from the moment of the latest alerts.in.ua poll, and "the first hour" means the next 60 minutes
+      from that moment. If an update is more than 30 minutes late, the page says so. This is a time-series analysis study project,
+      not an official source.</p>
+    <p class="note"><strong>Important.</strong> The forecast does not replace official signals. Always respond to the siren
+      and to the notifications of the official "Air Alert" app.</p>
+
+    <h3>Two answers to two questions</h3>
+    <ul>
+      <li><strong>Alert in hour N</strong>: will the oblast be under alert for at least part of the N-th hour after the forecast moment
+        (for a forecast made at 14:20 the first hour is 14:20–15:20).
+        For the first hour this almost always depends on whether an alert is on now.</li>
+      <li><strong>New alert within N h</strong>: will a new alert start within the next N hours. This is the harder and
+        more useful question: "should I expect an alert soon?".</li>
+    </ul>
+
+    <h3>Data</h3>
+    <ul>
+      <li>History: a volunteer dataset of alerts by oblast since the start of the full-scale invasion
+        (<a href="https://github.com/Vadimkin/ukrainian-air-raid-sirens-dataset" rel="noopener">Vadimkin/ukrainian-air-raid-sirens-dataset</a>),
+        updated about once a day.</li>
+      <li>Current state: <a href="https://alerts.in.ua" rel="noopener">alerts.in.ua</a>, if the server has an API token.
+        An alert in any raion or hromada marks the whole oblast, as in the historical data.
+        Without a token the page shows the state at the end of the dataset.</li>
+      <li>Raions: raion-level alert history from the "official" file of the same repository (updated until 7 September 2026)
+        and alerts.in.ua records. Oblast and raion boundaries: OCHA/HDX COD-AB (SSPE Kartographia, CC BY 3.0 IGO); the oblast
+        outlines are the raions merged, so both levels line up exactly.</li>
+    </ul>
+
+    <h3>Raions</h3>
+    <p>Pick an oblast on the map and the map zooms to it and shows its raions: red where the whole raion (or the whole
+      oblast) is under alert, striped where only some hromadas are. The oblast panel lists every raion with its live state,
+      since when, which hromadas, and its 1, 3 and 6 hour forecast; click a raion to open its own panel.
+      The "Raions" view colours the whole country by raion. "To alerts" zooms to the raions under alert: all of them
+      or only those of the oblast picked in the list next to it.</p>
+    <p>Each raion forecast says where it comes from: <strong>raion model</strong> (a separate model on raion data),
+      <strong>oblast × raion share</strong> (the oblast probability times the share of the oblast's alerts over 28 days that
+      reached this raion) or <strong>oblast forecast</strong> when there is no raion data. How these methods did on the latest
+      four weeks of raion data is shown in the raion panel.</p>
+
+    <h3>The model</h3>
+    <p>For each "target × horizon" pair a separate gradient boosting model (LightGBM) is trained on the latest months of history.
+      Features: whether an alert is on now and for how long, the time since the last one, the number of alerts in 6 h / a day / a week,
+      hourly activity over the last day, the share of alerts at the same hour of day over 7 and 28 days,
+      the day of week and the hour in Kyiv, and the state of every other oblast now and an hour ago. The model learns by itself
+      which oblasts "warn" about others.</p>
+    <p>Features are built only from what was known at the forecast moment. An automatic test checks this:
+      features computed on the full data must equal the features computed on data cut at the forecast moment.</p>
+
+    <h3>How quality is checked</h3>
+    <p>Before every training the last week is held out: the model learns on the data before it and forecasts it hour by hour,
+      as in real time. The result is compared with two simple baselines:</p>
+    <ul>
+      <li><strong>Climatology</strong>: the share of the last 28 days with an alert at this hour;</li>
+      <li><strong>Persistence</strong>: "what is now will be".</li>
+    </ul>
+    <p>Metrics: the Brier score (the mean squared error of the probability, lower is better), the Brier skill score against
+      climatology (above zero means the model beats the baseline) and ROC AUC. After the check the model is refitted on all data.</p>
+    <p>In addition, the service keeps every forecast it issued and, once the forecast hour has passed, compares it with what happened.
+      The results are on the "Model quality" page and in the statistics of every oblast ("Past forecasts and what happened").
+      The model is retrained daily on fresh data (a separate job outside the 10-minute cycle), so new alerts make it into training.</p>
+
+    <h3>Language</h3>
+    <p>The page is in English by default; the EN / UK switch in the header changes the language and is remembered in this browser.
+      A link can also set it: <code>?lang=uk</code> or <code>?lang=en</code>. Place names follow the official transliteration
+      (oblasts as "Kyiv Oblast", raions by their COD-AB English names, hromadas transliterated).</p>
+
+    <h3>API</h3>
+    <p id="api-note-en">All the page data is available as JSON: <a href="/docs">/docs</a> (interactive documentation),
+      <code>/api/state</code>, <code>/api/forecast</code>, <code>/api/regions/{id}</code>, <code>/api/raions</code>, <code>/api/metrics</code>.</p>
+    <p class="muted small">Code: <a href="https://github.com/IvanSnezhok/air-raid-forecast-ua" rel="noopener">github.com/IvanSnezhok/air-raid-forecast-ua</a></p>
+    </div>
+
+    <div data-lang="uk" lang="uk">
     <h2>Як це працює</h2>
     <p>Сервіс показує, де повітряна тривога триває зараз, і оцінює ймовірність тривоги
-      в кожній області на 1, 2, 3 і 6 годин уперед. Дані і прогноз оновлюються кожні 10 хвилин:
+      в кожній області та районі на 1, 2, 3 і 6 годин уперед. Дані і прогноз оновлюються кожні 10 хвилин:
       кожен прогноз зроблено від моменту останнього опитування alerts.in.ua, «перша година» означає наступні 60 хвилин
       від цього моменту. Якщо оновлення затримується понад 30 хвилин, сторінка про це попереджає. Це навчальний проєкт з аналізу часових рядів,
       а не офіційне джерело.</p>
@@ -127,16 +221,20 @@
         Тривога в будь-якому районі чи громаді позначає всю область, як і в історичних даних.
         Без токена показано стан на кінець датасету.</li>
       <li>Райони: історія тривог по районах з «офіційного» файлу того самого репозиторію (оновлювався до 7 вересня 2026)
-        і записи alerts.in.ua. Межі районів: OCHA/HDX COD-AB (ДНВП «Картографія», CC BY-IGO).</li>
+        і записи alerts.in.ua. Межі областей і районів: OCHA/HDX COD-AB (ДНВП «Картографія», CC BY 3.0 IGO); контури
+        областей отримано злиттям районів, тому межі обох рівнів збігаються.</li>
     </ul>
 
     <h3>Райони</h3>
-    <p>Шар «Райони» показує, які райони під тривогою зараз (тривога на всю область, на район або лише на окремі громади району)
-      і прогноз для кожного району. Кнопка «До тривог» наближає мапу до районів під тривогою: усіх або в обраній області.</p>
-    <p>Прогноз для району позначено, звідки він: <strong>модель району</strong> (окрема модель на районних даних, потребує
-      районної історії за останні 28 днів), <strong>область × частка району</strong> (ймовірність тривоги в області,
-      помножена на те, яку частку тривог області за 28 днів мав цей район) або <strong>прогноз області</strong>, коли районних
-      даних немає. Як ці способи показали себе на останніх чотирьох тижнях з районними даними, видно в деталях району.</p>
+    <p>Оберіть область на мапі, і мапа наблизиться до неї та покаже її райони: червоним райони, де тривога на весь район
+      (або на всю область), смугами райони, де тривога лише в частині громад. Панель області показує кожен район: чи триває
+      тривога, з якого часу, які громади, і прогноз на 1, 3 і 6 год; клік по району відкриває його панель.
+      Перемикач «Райони» фарбує всю країну по районах. Кнопка «До тривог» наближає мапу до районів під тривогою:
+      до всіх або лише в області, обраній у списку поруч.</p>
+    <p>Прогноз для району позначено, звідки він: <strong>модель району</strong> (окрема модель на районних даних),
+      <strong>область × частка району</strong> (ймовірність тривоги в області, помножена на те, яку частку тривог області
+      за 28 днів мав цей район) або <strong>прогноз області</strong>, коли районних даних немає. Як ці способи показали себе на
+      останніх чотирьох тижнях з районними даними, видно в деталях району.</p>
 
     <h3>Модель</h3>
     <p>Для кожної пари «ціль × горизонт» навчається окремий градієнтний бустинг (LightGBM) на останніх місяцях історії.
@@ -157,21 +255,37 @@
     <p>Метрики: Brier score (середня квадратична помилка ймовірності, менше краще), Brier skill score відносно кліматології
       (більше нуля означає, що модель краща за орієнтир) і ROC AUC. Після перевірки модель перенавчається на всіх даних.</p>
     <p>Крім того, сервіс зберігає кожен виданий прогноз і, коли прогнозована година минає, звіряє його з тим, що сталося насправді.
-      Результати видно на сторінці «Якість моделі» і в деталях кожної області («Минулі прогнози і що сталося»).
+      Результати видно на сторінці «Якість моделі» і в статистиці кожної області («Минулі прогнози і що сталося»).
       Модель щодоби перенавчається на свіжих даних (окремим завданням, поза 10-хвилинним циклом), тож нові тривоги потрапляють у навчання.</p>
 
+    <h3>Мова</h3>
+    <p>Типово сторінка англійською; перемикач EN / UK у заголовку змінює мову і запамʼятовується в цьому браузері.
+      Мову можна задати й посиланням: <code>?lang=uk</code> або <code>?lang=en</code>.</p>
+
     <h3>API</h3>
-    <p>Усі дані сторінки доступні як JSON: <a href="/docs">/docs</a> (інтерактивна документація),
-      <code>/api/state</code>, <code>/api/forecast</code>, <code>/api/regions/{id}</code>, <code>/api/metrics</code>.</p>
+    <p id="api-note-uk">Усі дані сторінки доступні як JSON: <a href="/docs">/docs</a> (інтерактивна документація),
+      <code>/api/state</code>, <code>/api/forecast</code>, <code>/api/regions/{id}</code>, <code>/api/raions</code>, <code>/api/metrics</code>.</p>
     <p class="muted small">Код: <a href="https://github.com/IvanSnezhok/air-raid-forecast-ua" rel="noopener">github.com/IvanSnezhok/air-raid-forecast-ua</a></p>
+    </div>
   </section>
 </main>
 
+<dialog id="chart-dialog" class="chart-dialog" aria-labelledby="cd-title">
+  <div class="cd-head">
+    <h3 id="cd-title"></h3>
+    <button type="button" class="zbtn" id="cd-close" data-i18n-attr="aria-label:stats.close"><span aria-hidden="true">×</span></button>
+  </div>
+  <div class="cd-body" id="cd-body"></div>
+  <div class="chart-legend" id="cd-legend"></div>
+</dialog>
+<div id="ctip" class="tip ctip" hidden role="tooltip"></div>
+
 <footer class="foot">
   <span id="foot-status"></span>
-  <span>Не є офіційним джерелом. Реагуйте на офіційні сигнали тривоги.</span>
+  <span data-i18n="foot.note">Not an official source. Respond to official air raid alerts.</span>
 </footer>
 
+<script src="static/i18n.js"></script>
 <script src="static/app.js"></script>
 </body>
 </html>

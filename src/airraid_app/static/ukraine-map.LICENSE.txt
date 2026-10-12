@@ -1,0 +1,22 @@
+ukraine-map.json, ukraine-map-detail.json: simplified oblast and raion (district)
+boundaries of Ukraine used by the web map.
+
+Source: Ukraine - Subnational Administrative Boundaries (COD-AB), version v05,
+valid on 2025-09-01, published by OCHA on the Humanitarian Data Exchange:
+https://data.humdata.org/dataset/cod-ab-ukr
+Original data: State Scientific Production Enterprise "Kartographia" (Ukraine).
+License: Creative Commons Attribution for Intergovernmental Organisations
+(CC BY 3.0 IGO), https://creativecommons.org/licenses/by/3.0/igo/
+
+Changes: projected (Lambert conformal conic, standard parallels 45.5 and 51 N,
+central meridian 31.2 E) to the 1000-unit-wide map; shared borders cut into arcs
+at junctions and every arc simplified once (Douglas-Peucker, 0.22 units ~ 0.3 km
+for ukraine-map.json, 0.035 units ~ 45 m for ukraine-map-detail.json), so
+neighbours keep identical borders; the Chornobyl exclusion zone merged into
+Vyshhorodskyi raion; oblast outlines obtained by dissolving the raions of each
+oblast (the same arcs); isolated islets below 0.6 / 0.02 square units dropped.
+Built by scripts/build_map.py.
+
+alerts.in.ua location UIDs in src/airraid/raions.py are the published location
+ids of alerts.in.ua (also listed in the MIT-licensed alerts_in_ua Python client,
+https://github.com/alerts-ua/alerts-in-ua-py).

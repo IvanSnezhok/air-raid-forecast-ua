@@ -75,9 +75,11 @@ def test_metrics(client):
 
 def test_ui_is_served(client):
     r = client.get("/")
-    assert r.status_code == 200 and "Повітряні тривоги" in r.text
+    assert r.status_code == 200 and "Air raid alerts" in r.text and '<html lang="en">' in r.text
+    assert 'data-lang="uk"' in r.text and "Як це працює" in r.text  # the Ukrainian version is on the same page
     assert client.get("/static/app.js").status_code == 200
-    assert client.get("/static/ukraine-map.json").json()["regions"]
+    assert client.get("/static/ukraine-map.json").json()["oblasts"]
+    assert client.get("/static/i18n.js").status_code == 200
 
 
 def test_not_ready_returns_503(settings):

@@ -76,8 +76,10 @@ def test_forecast_endpoint_does_not_carry_raions(client):
 
 
 def test_raion_map_is_served(client):
-    geo = client.get("/static/raions-map.json").json()
-    assert len(geo["raions"]) == 138 and geo["oblast_borders"]
+    geo = client.get("/static/ukraine-map.json").json()
+    assert len(geo["raions"]) == 138 and geo["borders"]
+    detail = client.get(f"/static/{geo['detail']['file']}").json()
+    assert set(detail["raions"]) == set(geo["raions"]) and detail["lod"] == "detail"
 
 
 PAYLOAD_NOW = pd.Timestamp("2026-10-11 10:30", tz="UTC")
@@ -262,7 +264,8 @@ def test_static_site_has_raions(settings, tmp_path):
     assert len(raions["raions"]) == N_FORECAST
     for r in raions["raions"]:
         assert (out / "api" / "raions" / f"{r['id']}.json").exists()
-    assert (out / "static" / "raions-map.json").exists() and (out / "static" / "raions-map.LICENSE.txt").exists()
+    for f in ("ukraine-map.json", "ukraine-map-detail.json", "ukraine-map.LICENSE.txt", "i18n.js"):
+        assert (out / "static" / f).exists(), f
     assert 'href="api/raions.json"' in (out / "index.html").read_text(encoding="utf-8")
 
 
