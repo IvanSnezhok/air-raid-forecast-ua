@@ -163,7 +163,6 @@ function setLang(lang) {
   setFormatters();
   applyStatic();
   renderAttr();
-  $("#region-list").innerHTML = "";
   if (S.view === "about") renderAbout();
   if (!S.forecast) return;
   render();
@@ -794,11 +793,6 @@ function renderHeadline() {
     ? t("head.next", { h, list: top.map((r) => `${esc(oblShort(r.name))} <b>${pct(r.probs.onset[h])}</b>`).join(", ") })
     : t("head.nextNone", { h }));
   $("#headline").innerHTML = a;
-  const dl = $("#region-list");
-  if (!dl.childElementCount) {
-    dl.innerHTML = fc.regions.map((r) => `<option value="${esc(oblFull(r.name))}"></option>`).join("")
-      + (S.raions?.raions || []).map((r) => `<option value="${esc(raionName(r.id, r))}">${esc(oblFull(r.oblast))}</option>`).join("");
-  }
 }
 
 // When the data was last updated (api/status.json from the pipeline, /api/status on a server).
@@ -2166,20 +2160,6 @@ async function main() {
   $("#chart-dialog").addEventListener("close", () => { $("#ctip").hidden = true; });
   let rz = null;
   new ResizeObserver(() => { clearTimeout(rz); rz = setTimeout(() => { drawCharts(); paintLabels(); drawHistory(); }, 120); }).observe($("main"));
-  $("#search").addEventListener("change", (ev) => {
-    const q = normUk(ev.target.value);
-    if (!q) return;
-    const names = (r) => [oblFull(r.name), oblShort(r.name), r.name_uk, OBLAST[r.name]?.[0]].filter(Boolean).map(normUk);
-    const rnames = (r) => [raionName(r.id, r), r.name_uk, r.name].filter(Boolean).map(normUk);
-    const fr = S.forecast?.regions || [], rr = S.raions?.raions || [];
-    const reg = fr.find((x) => names(x).includes(q));
-    const rai = rr.find((x) => rnames(x).includes(q)) || (!reg && rr.find((x) => rnames(x).some((n) => n.startsWith(q))));
-    const reg2 = reg || (!rai && fr.find((x) => names(x).some((n) => n.startsWith(q))));
-    if (rai) selectRaion(rai.id, { zoom: true });
-    else if (reg2) select(reg2.id);
-    else return;
-    ev.target.value = ""; ev.target.blur();
-  });
   GEO.base = await getJSON("static/ukraine-map.json", "default");
   setView();
   let ok = await refresh();

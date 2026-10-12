@@ -195,14 +195,10 @@ code { font-size: 13px; background: var(--surface2); padding: 1px 5px; border-ra
   #map .lbl { font-size: 22px; }
 }
 
-/* headline, search, risk levels, verification */
+/* headline, risk levels, verification */
 .headline { font-size: 17px; line-height: 1.45; margin: 0 0 14px; max-width: 90ch; }
 .headline b { font-weight: 650; }
 .headline .hot { color: var(--alert); }
-.search { margin-left: auto; }
-.search input { font: inherit; font-size: 14px; padding: 6px 12px; border-radius: 10px; border: 1px solid var(--line);
-  background: var(--surface); color: var(--ink); width: 210px; }
-.search input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 .lvl { display: inline-block; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px; }
 .lvl.l0 { background: var(--surface2); color: var(--ink2); }
@@ -228,7 +224,7 @@ code { font-size: 13px; background: var(--surface2); padding: 1px 5px; border-ra
 .sw-dot.y1::after { content: ""; position: absolute; inset: 30%; border-radius: 50%; background: var(--ink); }
 .sw-dot.y0::after { content: ""; position: absolute; inset: 25%; border-radius: 50%; border: 2px solid var(--ink2); }
 .sw-dot.yn { opacity: .45; }
-@media (max-width: 600px) { .search { margin-left: 0; width: 100%; } .search input { width: 100%; } .headline { font-size: 15px; } }
+@media (max-width: 600px) { .headline { font-size: 15px; } }
 
 .lvl.yellow { background: #fbefc2; color: #7a5a00; }
 .lvl.red { background: var(--alert-soft); color: var(--alert); }

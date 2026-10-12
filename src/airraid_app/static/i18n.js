@@ -47,8 +47,6 @@ window.I18N = {
   "ctl.type": "Threat type",
   "ctl.typeTitle": "If an alert starts: the most likely threat and its level (yellow/red). Not the chance of an alert",
   "ctl.horizon": "Horizon",
-  "ctl.searchLabel": "Find an oblast or raion",
-  "ctl.search": "Find an oblast or raion…",
 
   "zoom.alerts": "To alerts",
   "zoom.alertsTitle": "Zoom the map to the raions under alert now",
@@ -543,8 +541,6 @@ window.I18N = {
   "ctl.type": "Тип загрози",
   "ctl.typeTitle": "Якщо тривога почнеться: найімовірніший тип загрози і рівень (жовтий/червоний). Це не ймовірність тривоги",
   "ctl.horizon": "Горизонт",
-  "ctl.searchLabel": "Знайти область або район",
-  "ctl.search": "Знайти область або район…",
 
   "zoom.alerts": "До тривог",
   "zoom.alertsTitle": "Наблизити мапу до районів, де зараз тривога",
