@@ -338,7 +338,7 @@ def cmd_keepalive(a) -> None:
     ref = os.environ["GITHUB_REF_NAME"]
     on_default = ref == (os.environ.get("DEFAULT_BRANCH") or "main")
     # other branches (tests): one keep-alive hop unless PIPELINE_KEEPALIVE_MAX_HOPS says otherwise
-    max_hops = int(os.environ.get("MAX_HOPS") or (72 if on_default else 1))
+    max_hops = int(os.environ.get("MAX_HOPS") or (72 if on_default else 3))  # TEMPORARY 3 for the e2e test; 1 before merge
     hop = int(os.environ.get("HOP") or 0)
     ok, why = keepalive_decision(enabled, hop, max_hops, [])
     if not ok:
