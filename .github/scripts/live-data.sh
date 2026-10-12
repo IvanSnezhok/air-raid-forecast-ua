@@ -6,14 +6,14 @@
 # STORE_DAYS=N (pipeline, train and history jobs): fetch only the tip commit, without
 # file contents, and check out only _state/ and the day partitions of the last N
 # days (plus tomorrow, for a run that crosses midnight UTC); OUTPUT_DAYS=M (default
-# N) limits the forecasts / verification partitions to M days. The store grows by
+# N) limits the forecasts / verification / calibration partitions to M days. The store grows by
 # every run and is never rewritten, so a full checkout would get slower every day.
 # Without STORE_DAYS the full tree is checked out.
 set -euo pipefail
 STORE="${STORE:-live-data}"
 BRANCH=live-data
 KINDS="polls alerts_active alerts_history history_pulls"
-OUTPUTS="forecasts verification"
+OUTPUTS="forecasts verification calibration"
 
 case "$1" in
   checkout)

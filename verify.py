@@ -18,11 +18,19 @@ origin (src/airraid/verification.py; tests/test_verify.py):
     replaced by dataset labels once the dataset covers the window.
 
 Writes reports/verification.csv and reports/verification_summary.json (Brier of
-the model vs the 28-day climatology over the last 24 h, 7 days and everything
-read, per target and horizon, hit rate); with --store also appends newly
-verified rows to the store's `verification`. Forecast probabilities are never
-recomputed: they are the ones logged when the forecast was issued. Verification
-is monitoring only; it does not feed back into model weights.
+the served forecast, of the raw model and of the 28-day climatology over the last
+24 h, 7 days and everything read, per target and horizon, hit rate); with --store
+also appends newly verified rows to the store's `verification`. Forecast
+probabilities are never recomputed: they are the ones logged when the forecast
+was issued.
+
+Learning from the verified forecasts (airraid.recalibration): the rows verified
+now refit the guarded recalibration map per target and horizon (a Platt map of
+the raw model probability, served only where it lowered the Brier score on the
+latest verified day). It is written to reports/calibration.json and, with
+--store, appended to the store's `calibration`, from where the next forecast
+(predict_now.py, store as_of its origin) applies it. The LightGBM weights are not
+changed; they are retrained daily on the dataset by the train job.
 """
 from __future__ import annotations
 
@@ -35,6 +43,7 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+from airraid import recalibration  # noqa: E402
 from airraid import store as pit  # noqa: E402
 from airraid.data import download, load_alerts  # noqa: E402
 from airraid.verification import label_grid, outcomes, summarise, verify  # noqa: E402,F401  (re-exported)
@@ -43,6 +52,7 @@ ROOT = Path(__file__).resolve().parent
 LOG_PATH = ROOT / "reports" / "forecast_log.csv"
 OUT_PATH = ROOT / "reports" / "verification.csv"
 SUMMARY_PATH = ROOT / "reports" / "verification_summary.json"
+CAL_PATH = ROOT / "reports" / "calibration.json"
 
 
 def read_forecasts(path: Path | None, store_root: Path | None, since: pd.Timestamp | None = None) -> pd.DataFrame:
@@ -82,18 +92,28 @@ def main():
     if not args.no_download:
         download()
     v, summary = verify(log, load_alerts(), args.store, now)
+    verified_at = now.floor("s")
+    # learn from what was verified so far: every row's window has closed and its label is known now
+    cal = recalibration.fit(v.assign(verified_at=verified_at), verified_at)
+    summary["calibration"] = recalibration.describe(cal)
     OUT_PATH.parent.mkdir(exist_ok=True)
     v.to_csv(OUT_PATH, index=False)
     SUMMARY_PATH.write_text(json.dumps(summary, indent=2))
+    CAL_PATH.write_text(json.dumps(summary["calibration"], indent=2))
     if args.store is not None and len(v):
-        new = pit.append(args.store, "verification", v.assign(verified_at=now.floor("s")))
+        new = pit.append(args.store, "verification", v.assign(verified_at=verified_at))
         print(f"store: {sum(len(pd.read_parquet(f)) for f in new)} newly verified rows appended")
+    if args.store is not None:
+        pit.append(args.store, "calibration", cal)
+    c = summary["calibration"]
+    states = ", ".join(f"{g['target']} {g['horizon']}h {g['reason']}" for g in c["groups"])
+    print(f"recalibration: active for {c['n_active']} of {c['n_total']} target x horizon ({states})")
     print(f"verified {len(v)} forecasts ({summary['n_verified_by_label_source']}), {summary['pending']} still "
           f"pending (record until {summary['verified_until_utc']}, dataset until {summary['dataset_end_utc']})")
     for g in summary["groups"]:
         if g["window"] == "7d":
             print(f"  {g['target']:6s} h={g['horizon_h']}  n={g['n']:5d}  brier model {g['brier_model']:.4f}  "
-                  f"clim {g['brier_clim']:.4f}  hit@0.5 {g['hit_rate_at_0.5']:.3f}")
+                  f"raw {g['brier_raw']:.4f}  clim {g['brier_clim']:.4f}  hit@0.5 {g['hit_rate_at_0.5']:.3f}")
 
 
 if __name__ == "__main__":

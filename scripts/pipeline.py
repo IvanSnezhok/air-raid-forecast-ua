@@ -240,6 +240,10 @@ def build_status(now: datetime, timings: dict, forecast: dict, models: dict, ver
         "verification": {"n_verified": verification.get("n_verified"), "pending": verification.get("pending"),
                          "by_label_source": verification.get("n_verified_by_label_source"),
                          "windows": windows},
+        # learning from verified forecasts (airraid.recalibration): fitted by verify, applied by the next forecast
+        "calibration": {"n_active": (verification.get("calibration") or {}).get("n_active"),
+                        "fitted_at": (verification.get("calibration") or {}).get("fitted_at"),
+                        "applied_to_this_forecast": forecast.get("calibration_active")},
         "steps_s": steps,
         "failed_steps": failed,
         "elapsed_s": round(now.timestamp() - float(t0), 1) if t0 else None,

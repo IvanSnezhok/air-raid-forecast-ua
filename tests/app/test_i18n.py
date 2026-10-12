@@ -21,6 +21,7 @@ CYR = re.compile("[Ѐ-ӿ]")
 def _dicts() -> dict:
     src = (STATIC / "i18n.js").read_text(encoding="utf-8")
     body = src[src.index("window.I18N =") + len("window.I18N ="):].strip().rstrip(";")
+    body = "\n".join(ln for ln in body.splitlines() if not ln.lstrip().startswith("//"))  # section comments
     return json.loads(body)
 
 
@@ -47,6 +48,7 @@ def used_keys() -> set[str]:
     keys |= {f"{fam}.{m}" for fam in ("method", "methodLong") for m in METHOD_UK}
     keys |= {f"live.{lv}" for lv in ("oblast", "raion", "hromada")}
     keys |= {"target.active", "target.onset"}
+    keys |= {f"hi.state.{r}" for r in ("ok", "no_gain", "collecting")} | {"hi.src.dataset", "hi.src.store"}
     keys |= {f"load.{c}" for c in _engine_codes()} | {f"load.{s}" for s in ("starting", "loading", "training", "ready", "error")}
     return keys
 
@@ -57,7 +59,8 @@ def _engine_codes() -> set[str]:
 
 
 def test_dynamic_families_are_used_as_expected():
-    for fam in ("lvl.", "lvlc.", "type.", "typeShort.", "typePhrase.", "method.", "methodLong.", "live.", "load.", "target."):
+    for fam in ("lvl.", "lvlc.", "type.", "typeShort.", "typePhrase.", "method.", "methodLong.", "live.", "load.", "target.",
+                "hi.state.", "hi.src."):
         assert f"t(`{fam}${{" in APP, fam
 
 

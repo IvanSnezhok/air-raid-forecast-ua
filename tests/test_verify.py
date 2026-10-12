@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from airraid.data import build_grid, load_alerts
@@ -120,3 +121,31 @@ def test_site_strip_prefers_the_verified_forecast_of_each_hour():
     out = site_summary(J, o + pd.Timedelta(hours=2), region="Lvivska oblast")
     assert [(x["origin"][11:16], x["y"]) for x in out["recent"]["active_h1"]] == [("23:37", 0)]
     assert out["n_verified"] == 1 and out["n_issued"] == 3
+
+
+def test_raw_and_served_probabilities_are_both_scored():
+    """With the recalibration layer each row carries p (served) and p_raw (the model); verify scores
+    both. Rows logged before the layer (no p_raw column, or NaN) served the raw probability."""
+    from verify import verify
+
+    T = pd.Timestamp("2026-10-11 04:36", tz="UTC")
+    alerts = pd.DataFrame({"region": ["Kharkivska oblast", "Lvivska oblast"] * 50,
+                           "start": [T - pd.Timedelta(hours=k, minutes=10) for k in range(100)], "naive": False})
+    alerts["end"] = alerts["start"] + pd.Timedelta(minutes=20)
+    o = T.floor("h") - pd.Timedelta(hours=5)
+    log = pd.DataFrame([{"origin": o + pd.Timedelta(hours=k), "region": r, "target": "active", "horizon": 1,
+                         "p": 0.6, "p_raw": 0.9, "calibration": "platt", "clim": 0.2}
+                        for k in range(3) for r in ("Kharkivska oblast", "Lvivska oblast")])
+    v, summary = verify(log, alerts, None, now=T)
+    assert len(v) == 6
+    np.testing.assert_allclose(v["brier_model"], (0.6 - v["y"]) ** 2)
+    np.testing.assert_allclose(v["brier_raw"], (0.9 - v["y"]) ** 2)
+    g = next(x for x in summary["groups"] if x["window"] == "all")
+    assert g["brier_raw"] == pytest.approx(np.mean((0.9 - v["y"]) ** 2))
+    assert g["brier_model"] == pytest.approx(np.mean((0.6 - v["y"]) ** 2))
+    # older rows: no p_raw at all, or NaN in a frame mixing old and new rows
+    for old in (log.drop(columns=["p_raw", "calibration"]), log.assign(p_raw=np.where(log.index < 3, np.nan, 0.9))):
+        v2, s2 = verify(old, alerts, None, now=T)
+        want = np.where(v2.index < 3, v2["p"], 0.9) if "p_raw" in old else v2["p"]
+        np.testing.assert_allclose(v2["p_raw"], want)
+        np.testing.assert_allclose(v2["brier_raw"], (v2["p_raw"] - v2["y"]) ** 2)
