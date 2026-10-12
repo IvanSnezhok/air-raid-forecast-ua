@@ -1,23 +1,32 @@
 {
- "updated_at": "2026-10-12T00:57:30+00:00",
+ "updated_at": "2026-10-12T01:46:03+00:00",
  "source": "pipeline",
- "origin": "2026-10-12T00:57Z",
- "issued_at": "2026-10-12T00:56:51Z",
- "last_poll": "2026-10-12T00:56:47Z",
+ "origin": "2026-10-12T01:46Z",
+ "issued_at": "2026-10-12T01:45:39Z",
+ "last_poll": "2026-10-12T01:45:22Z",
  "dataset_end": "2026-10-11T04:36Z",
  "record_complete_until": "2026-10-11T20:18Z",
  "model": {
   "trained_until": "2026-10-11T04:00:00+00:00",
-  "trained_at": "2026-10-11T23:51:13.795475+00:00",
+  "trained_at": "2026-10-12T01:41:23.212999+00:00",
   "holdout": true,
-  "code_version": "4e0fe641f876",
-  "served": null,
-  "text_status": null
+  "code_version": "96bc342478d9",
+  "served": "lightgbm",
+  "text_status": "text archive does not cover 2026-10-12 01:46:00+00:00 (coverage {'deraketaua': ('2025-01-01 00:00:00+00:00', '2026-10-12 01:45:27+00:00'), 'kpszsu': ('2025-01-01 00:00:00+00:00', '2026-10-12 01:45:25+00:00'), 'monitorwarr': ('2025-01-01 00:00:00+00:00', '2026-10-12 01:45:28+00:00'), 'war_monitor': ('2025-01-01 00:00:00+00:00', '2026-10-12 01:45:29+00:00')})"
  },
- "threat_type_origin": "2026-10-12T00:57Z",
+ "raions": {
+  "models_source": "saved",
+  "tier": "live_state",
+  "n_raions": 119,
+  "n_active": 30,
+  "methods": {
+   "lightgbm_state": 952
+  }
+ },
+ "threat_type_origin": "2026-10-12T01:46Z",
  "verification": {
   "n_verified": 144,
-  "pending": 3504,
+  "pending": 3696,
   "by_label_source": {
    "store": 144
   },
@@ -49,24 +58,25 @@
   }
  },
  "steps_s": {
-  "setup": 27.5,
-  "checkout_store": 1.2,
-  "dataset": 1.1,
-  "poll": 1.1,
-  "forecast": 3.5,
-  "threat_type": 28.9,
-  "verify": 2.1,
-  "build_site": 7.3
+  "setup": 18.8,
+  "checkout_store": 1.8,
+  "dataset": 1.0,
+  "poll": 0.7,
+  "text_collect": 14.5,
+  "forecast": 2.6,
+  "threat_type": 12.2,
+  "verify": 1.1,
+  "build_site": 10.0
  },
  "failed_steps": [],
- "elapsed_s": 73.5,
+ "elapsed_s": 64.8,
  "run": {
-  "id": "38189908948",
-  "url": "https://github.com/IvanSnezhok/air-raid-forecast-ua/actions/runs/38189908948",
-  "event": "workflow_dispatch",
-  "trigger": "keepalive",
-  "hop": "7",
+  "id": "38193074546",
+  "url": "https://github.com/IvanSnezhok/air-raid-forecast-ua/actions/runs/38193074546",
+  "event": "push",
+  "trigger": "push",
+  "hop": "0",
   "ref": "claude/dazzling-darwin-jlnlqj-automation",
-  "sha": "88b8d007b1f31851ec9658f8b4113e662c217f55"
+  "sha": "65fd9e2711217041cfb7439421e803b2e388d7c5"
  }
 }
