@@ -291,6 +291,27 @@ def retrain_reason(meta: dict, dataset_end: datetime | None, after_h: float,
     return None
 
 
+def train_blockers(recent: list[dict], why: str, cooldown_min: float, bundle_trained: datetime | None,
+                   now: datetime) -> list[dict]:
+    """Train runs that make a new dispatch pointless: one still running, or one started recently.
+
+    A bundle without the raion/text layers waits 6 h between dispatches, so a layer that keeps
+    failing to train does not trigger a train run every hour. Only train runs started after
+    that bundle was trained count for it: a run from before (e.g. under the previous models
+    key, when modelling code changed) cannot have produced its layers.
+    """
+    missing = why.startswith("the bundle has no")
+    cutoff = now - timedelta(minutes=max(cooldown_min, 360) if missing else cooldown_min)
+    busy = []
+    for r in recent:
+        created = parse_ts(r["created_at"])
+        if r["status"] != "completed":
+            busy.append(r)
+        elif created > cutoff and not (missing and bundle_trained is not None and created < bundle_trained):
+            busy.append(r)
+    return busy
+
+
 def cmd_retrain_check(a) -> None:
     meta = _read_json(Path(a.models) / "meta.json")
     fc = _read_json(ROOT / "reports" / "forecast_meta.json")
@@ -303,10 +324,8 @@ def cmd_retrain_check(a) -> None:
         return
     ref = os.environ["GITHUB_REF_NAME"]
     recent = runs(a.workflow, ref, per_page=5)
-    # a layer that keeps failing to train must not trigger a train run every hour
+    busy = train_blockers(recent, why, a.cooldown, parse_ts(meta.get("trained_at")), utcnow())
     cooldown = max(a.cooldown, 360) if why.startswith("the bundle has no") else a.cooldown
-    cutoff = utcnow() - timedelta(minutes=cooldown)
-    busy = [r for r in recent if r["status"] != "completed" or parse_ts(r["created_at"]) > cutoff]
     if busy:
         print(f"retrain wanted ({why}) but a train run is running or started < {cooldown:.0f} min ago: {busy[0]['html_url']}")
         return

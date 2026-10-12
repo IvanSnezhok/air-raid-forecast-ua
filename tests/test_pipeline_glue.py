@@ -53,6 +53,26 @@ def test_retrain_reason():
     assert P.retrain_reason(ok, end, 6, ["raion", "text"]) == "the bundle has no raion and no text models"
 
 
+def test_train_blockers_ignore_runs_older_than_a_fallback_bundle():
+    # 12 Oct: a UI change touched a hashed file at 07:01, the pipeline's fallback trained an
+    # oblast-only bundle at 07:08; the last train run (05:35) was for the previous models key
+    no_layers = "the bundle has no raion and no text models"
+    now = datetime(2026, 10, 12, 7, 20, tzinfo=timezone.utc)
+    fallback = datetime(2026, 10, 12, 7, 8, tzinfo=timezone.utc)
+    run = lambda created, status="completed": {"created_at": created, "status": status}  # noqa: E731
+    before = run("2026-10-12T05:35:38Z")
+    assert P.train_blockers([before], no_layers, 60, fallback, now) == []  # dispatch now
+    after = run("2026-10-12T07:12:00Z")  # a train run on this bundle's code still gave no layers
+    assert P.train_blockers([after], no_layers, 60, fallback, now) == [after]
+    assert P.train_blockers([run("2026-10-12T02:10:00Z")], no_layers, 60, None, now)  # 6 h cooldown kept
+    assert P.train_blockers([run("2026-10-12T01:10:00Z")], no_layers, 60, None, now) == []
+    running = run("2026-10-12T05:35:38Z", "in_progress")
+    assert P.train_blockers([running], no_layers, 60, fallback, now) == [running]
+    # other reasons keep the plain cooldown, whatever the bundle's age
+    assert P.train_blockers([run("2026-10-12T06:40:00Z")], "no models", 60, fallback, now)
+    assert P.train_blockers([run("2026-10-12T06:10:00Z")], "no models", 60, fallback, now) == []
+
+
 def test_raion_summary_counts_the_methods_served():
     raions = {"models_source": "saved", "tier": "live_state", "n_active": 3, "raions": [
         {"method": {"active": {"1": "lightgbm_state", "3": "oblast_x_share"}, "onset": {"1": "oblast_x_share"}}},
