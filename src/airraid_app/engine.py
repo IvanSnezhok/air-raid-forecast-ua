@@ -262,7 +262,11 @@ class ForecastEngine:
         # the moment forecasts will be made for: now with live data, else the end of the dataset
         now = pd.Timestamp.now(tz="UTC") if self.s.alerts_token else self.hist_end.floor("h")
         try:
-            self.raions.prepare(alerts, now, self.s.lgb_threads)  # dataset only: training never sees live data
+            if self.s.raion_train:
+                self.raions.prepare(alerts, now, self.s.lgb_threads)  # dataset only: training never sees live data
+            elif not (self.s.raion_models and self.raions.load_saved(self.s.raion_models_path)):
+                # AIRRAID_RAION_TRAIN=0 and nothing saved: shares only, oblast x share (labelled)
+                self.raions.prepare(alerts, now, self.s.lgb_threads, train=False)
         except Exception:  # noqa: BLE001 - the oblast forecast must not depend on the raion layer
             log.exception("raion layer preparation failed")
 

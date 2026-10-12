@@ -29,6 +29,10 @@ class Settings:
     # Train the raion models (a few hundred MB while training); off on 512 MB hosts:
     # the raion layer then derives raion forecasts from the oblast forecast.
     raion_models: bool = True
+    # False (AIRRAID_RAION_TRAIN=0): never train raion models here; serve the ones saved in
+    # raion_model_dir (default <model_dir>/raions) by a separate job, else oblast x share.
+    raion_train: bool = True
+    raion_model_dir: Path | None = None
     # Threat-type forecast CSV (path or URL) from threat-type/predict_type_now.py; optional.
     type_forecast: str | None = None
     # Live alert state. Never commit the token; set it as an env var / secret.
@@ -46,6 +50,11 @@ class Settings:
     # Run loading/training in a background thread (False in tests).
     background: bool = True
     lgb_threads: int = field(default_factory=lambda: os.cpu_count() or 2)
+
+    @property
+    def raion_models_path(self) -> Path:
+        """Where saved raion models are read from (AIRRAID_RAION_MODEL_DIR, default <model_dir>/raions)."""
+        return self.raion_model_dir or self.model_dir / "raions"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -68,6 +77,9 @@ class Settings:
         s.type_forecast = env.get("AIRRAID_TYPE_FORECAST") or (str(local_types) if local_types.exists() else None)
         s.download = _env_bool("AIRRAID_DOWNLOAD", s.download)
         s.raion_models = _env_bool("AIRRAID_RAION_MODELS", s.raion_models)
+        s.raion_train = _env_bool("AIRRAID_RAION_TRAIN", s.raion_train)
+        if v := env.get("AIRRAID_RAION_MODEL_DIR"):
+            s.raion_model_dir = Path(v)
         for name, attr, cast in (
             ("AIRRAID_TRAIN_MONTHS", "train_months", int),
             ("AIRRAID_MAX_TRAIN_MONTHS", "max_train_months", int),

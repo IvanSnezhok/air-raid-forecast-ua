@@ -183,6 +183,57 @@ def test_raion_model_is_used_when_history_reaches_now(lgb_settings):
         assert d["evaluation"]["scores"][0]["model"] == "lightgbm"
 
 
+def test_saved_raion_models_are_served_without_training(lgb_settings, tmp_path, monkeypatch):
+    """A separate job trains and save()s the raion models; with AIRRAID_RAION_TRAIN=0 the
+    site build only load_saved()s them and serves the same forecast, never training."""
+    from airraid_app.raion_engine import RaionForecaster
+
+    e = ForecastEngine(lgb_settings)
+    e.bootstrap()
+    assert e.raions.source == "trained" and e.raions.models
+    saved = tmp_path / "raions"
+    e.raions.save(saved)
+    assert (saved / "meta.json").exists() and len(list(saved.glob("*.txt"))) == len(e.raions.models)
+
+    def no_training(*a, **k):
+        raise AssertionError("raion models must not be trained when AIRRAID_RAION_TRAIN=0")
+    monkeypatch.setattr(RaionForecaster, "_train", no_training)
+    s = replace(lgb_settings, raion_train=False, raion_model_dir=saved)
+    e2 = ForecastEngine(s)
+    e2.bootstrap()
+    assert e2.raions.source == "saved" and set(e2.raions.models) == set(e.raions.models)
+    assert e2.raions.shares == e.raions.shares and e2.raions.share_period == e.raions.share_period
+    with TestClient(create_app(lgb_settings, e)) as c1, TestClient(create_app(s, e2)) as c2:
+        a, b = c1.get("/api/raions").json(), c2.get("/api/raions").json()
+    assert b["models_source"] == "saved" and a["models_source"] == "trained"
+    assert [r["probs"] for r in a["raions"]] == [r["probs"] for r in b["raions"]]
+    assert [r["method"] for r in a["raions"]] == [r["method"] for r in b["raions"]]
+
+
+def test_no_saved_raion_models_fall_back_to_oblast_x_share(lgb_settings, tmp_path, monkeypatch):
+    from airraid_app.raion_engine import RaionForecaster
+
+    monkeypatch.setattr(RaionForecaster, "_train", lambda *a, **k: (_ for _ in ()).throw(AssertionError("trained")))
+    s = replace(lgb_settings, raion_train=False, raion_model_dir=tmp_path / "nothing-saved")
+    e = ForecastEngine(s)
+    e.bootstrap()
+    assert e.raions.source == "none" and not e.raions.models and e.raions.shares
+    with TestClient(create_app(s, e)) as c:
+        body = c.get("/api/raions").json()
+    assert body["models_source"] == "none" and "частка" in body["models_source_uk"]
+    methods = {m for r in body["raions"] for t in r["method"].values() for m in t.values()}
+    assert methods <= {"oblast_x_share", "oblast", None} and "oblast_x_share" in methods
+
+
+def test_saved_raion_models_for_another_selection_are_not_used(lgb_settings, tmp_path):
+    e = ForecastEngine(lgb_settings)
+    e.load_data()
+    e.raions.models, e.raions.model_info = {}, {}
+    e.raions.save(tmp_path)
+    e.raions.selection = {**e.raions.selection, "active_h1": {"chosen": {"history": "oblast"}}}
+    assert not e.raions.load_saved(tmp_path) and e.raions.source != "saved"
+
+
 def test_raion_features_leak_free_on_synthetic_data():
     """Offline twin of tests/test_raion_leakage.py (runs in CI): truncating at T changes nothing, a lag-0 leak does."""
     vol = synthetic_alerts().rename(columns={"started_at": "start", "finished_at": "end"})

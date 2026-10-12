@@ -169,6 +169,8 @@ docker run -p 7860:7860 -e ALERTS_IN_UA_TOKEN=... airraid
 | `AIRRAID_OFFICIAL_PATH` | `data/raw/official_data_en.csv` | «офіційний» файл тривог по районах (качається сам, якщо `AIRRAID_DOWNLOAD=1`) |
 | `AIRRAID_STORE` | – | шлях до чекауту гілки `live-data`: районна історія alerts.in.ua після 7 вересня 2026 |
 | `AIRRAID_RAION_MODELS` | `1` | навчати моделі районів (`0` на хостах з 512 МБ: тоді райони рахуються від прогнозу області) |
+| `AIRRAID_RAION_TRAIN` | `1` | `0`: ніколи не навчати моделі районів у цьому процесі, а брати збережені окремим завданням (`RaionForecaster.save` / `load_saved`); якщо їх немає, прогноз району = прогноз області × частка району (`models_source: "none"` у `/api/raions`) |
+| `AIRRAID_RAION_MODEL_DIR` | `<AIRRAID_MODEL_DIR>/raions` | звідки читати збережені моделі районів |
 
 ## Безкоштовний хостинг
 

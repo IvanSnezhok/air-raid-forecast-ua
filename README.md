@@ -480,6 +480,11 @@ The web app reads `reports/raions/summary.json` for the chosen methods and plans
 it, it serves the current-state model with defaults. `AIRRAID_STORE` (same variable as
 `predict_now.py`) adds the store's raion history; `ALERTS_IN_UA_TOKEN` gives the live
 raion state; `AIRRAID_RAION_MODELS=0` skips raion model training on small hosts.
+`RaionForecaster.save(dir)` / `load_saved(dir)` persist the raion models and shares, so a
+separate job can train them and a site build can serve them without training
+(`AIRRAID_RAION_TRAIN=0`, models from `AIRRAID_RAION_MODEL_DIR`, default
+`<AIRRAID_MODEL_DIR>/raions`; without saved models the raion forecast is oblast × share,
+labelled `models_source: "none"` in `/api/raions`).
 
 ## Learning loop (live)
 

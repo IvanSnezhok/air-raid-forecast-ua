@@ -28,11 +28,14 @@ models scored better there too, so it is treated like every raion.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
+import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
@@ -63,6 +66,13 @@ TIERS = {
     "none": ["oblast_x_share", "oblast"],
 }
 MODEL_KINDS = ("lightgbm_state", "lightgbm")
+SAVED_FORMAT = 1  # layout of save() / load_saved()
+SOURCE_UK = {
+    "trained": "моделі районів навчені під час запуску",
+    "saved": "моделі районів навчені окремим завданням і завантажені",
+    "none": "моделей районів немає (навчання вимкнено, збережених моделей немає): прогноз району = прогноз області × частка району",
+    "off": "моделі районів вимкнено (AIRRAID_RAION_MODELS=0): прогноз району = прогноз області × частка району",
+}
 
 
 @dataclass
@@ -143,6 +153,8 @@ class RaionForecaster:
         self.model_info: dict = {}
         self.selection: dict = {}
         self.evaluation: dict = {}
+        # where the raion models came from: trained (prepare), saved (load_saved), none, off
+        self.source: str | None = None
 
     # --------------------------------------------------------------- data
     def load(self, refresh: bool) -> None:
@@ -226,8 +238,11 @@ class RaionForecaster:
                    for m in self.chosen(t, h, tier)[:1])
 
     # ------------------------------------------------------------ prepare
-    def prepare(self, vol_alerts: pd.DataFrame, now: pd.Timestamp, lgb_threads: int = 2) -> None:
+    def prepare(self, vol_alerts: pd.DataFrame, now: pd.Timestamp, lgb_threads: int = 2, train: bool = True) -> None:
         """Shares from the latest covered 28 days; raion models trained on the raion history.
+
+        `train=False` (AIRRAID_RAION_TRAIN=0, the 10-minute pipeline's site build) computes
+        only the shares: the raion forecast is then the oblast forecast x share, labelled so.
 
         `vol_alerts` is the volunteer dataset only (no live records: training
         never sees live data). Everything learnt here ends where both the raion
@@ -238,6 +253,7 @@ class RaionForecaster:
         forecasts will be made for, since it needs the 28 days before it.
         """
         self.shares, self.share_period, self.models, self.model_info = {}, None, {}, {}
+        self.source = "off" if not self.s.raion_models else ("trained" if train else "none")
         hist = self.history
         if hist is None or hist.alerts.empty or vol_alerts.empty:
             return
@@ -248,7 +264,7 @@ class RaionForecaster:
         else:
             self._prepare_shares(vol_alerts, share_end.floor("h"))
         train_end = hist.latest_window(pd.Timedelta(days=14), until)
-        for kind in MODEL_KINDS if self.s.raion_models and train_end is not None else ():
+        for kind in MODEL_KINDS if train and self.s.raion_models and train_end is not None else ():
             if not self._wanted(kind):
                 continue
             if kind == "lightgbm" and not hist.covered(now - pd.Timedelta(days=29), now - pd.Timedelta(hours=1)):
@@ -312,6 +328,74 @@ class RaionForecaster:
                 self.models[(kind, t, h)] = GBM(n_estimators=trees, params={"num_threads": threads}).fit(view[m], y[m])
         self.model_info[kind] = {"trained_at": _iso(pd.Timestamp.now(tz="UTC")), "data_end": _iso(end)}
         log.info("trained %s raion models on raion history to %s", kind, end)
+
+    # ------------------------------------------------------- save / load
+    def _selection_key(self) -> str:
+        """Identity of the selection the models were trained for (reports/raions/summary.json)."""
+        return hashlib.sha1(json.dumps(self.selection, sort_keys=True, default=str).encode()).hexdigest()[:12]
+
+    def save(self, d: Path | str) -> None:
+        """Write the raion models, their info and the shares to `d` (load_saved reads them back).
+
+        The train job trains the raion models out of the 10-minute run and publishes `d`
+        (<models>/raions) with the oblast bundle; the site build then only loads them.
+        """
+        d = Path(d)
+        d.mkdir(parents=True, exist_ok=True)
+        for old in d.glob("*.txt"):
+            old.unlink()
+        models = {}
+        for (kind, t, h), g in self.models.items():
+            name = f"{kind}__{t}_h{h}.txt"
+            g.model.save_model(str(d / name), num_iteration=g.n_estimators)
+            models[name] = {"kind": kind, "target": t, "horizon": int(h), "regions": list(g.regions),
+                            "trees": int(g.n_estimators or g.model.num_trees())}
+        sp = self.share_period
+        meta = {
+            "format": SAVED_FORMAT, "selection": self._selection_key(), "saved_at": _iso(pd.Timestamp.now(tz="UTC")),
+            "model_info": self.model_info, "models": models,
+            "shares": {f"{t}_h{h}": v for (t, h), v in self.shares.items()},
+            "share_period": [_iso(sp[0]), _iso(sp[1])] if sp else None,
+        }
+        (d / "meta.json").write_text(json.dumps(meta, indent=1))
+
+    def load_saved(self, d: Path | str | None) -> bool:
+        """Serve models and shares written by save(); False (nothing changed) when missing or stale.
+
+        Stale: another file layout, or a different validated selection (raion_run.py), since
+        the models are trained only for the chosen methods. Call after load().
+        """
+        if d is None:
+            return False
+        d = Path(d)
+        try:
+            meta = json.loads((d / "meta.json").read_text())
+        except (OSError, ValueError):
+            log.info("no saved raion models in %s", d)
+            return False
+        if meta.get("format") != SAVED_FORMAT or meta.get("selection") != self._selection_key():
+            log.warning("saved raion models in %s do not match this code / selection: not used", d)
+            return False
+        models = {}
+        try:
+            for name, info in meta.get("models", {}).items():
+                g = GBM(n_estimators=int(info["trees"]))
+                g.model = lgb.Booster(model_file=str(d / name))
+                g.regions = info["regions"]
+                models[(info["kind"], info["target"], int(info["horizon"]))] = g
+        except (OSError, KeyError, lgb.basic.LightGBMError) as e:
+            log.warning("saved raion models in %s unreadable: %s", d, e)
+            return False
+        shares = {}
+        for k, v in (meta.get("shares") or {}).items():
+            t, h = k.rsplit("_h", 1)
+            shares[(t, int(h))] = {r: float(x) for r, x in v.items()}
+        sp = meta.get("share_period")
+        self.models, self.model_info, self.shares = models, meta.get("model_info") or {}, shares
+        self.share_period = (pd.Timestamp(sp[0]), pd.Timestamp(sp[1])) if sp else None
+        self.source = "saved"
+        log.info("loaded %d saved raion models from %s (saved %s)", len(models), d, meta.get("saved_at"))
+        return True
 
     # ----------------------------------------------------------- forecast
     def _model_probs(self, kind: str, vol_alerts, origin, live: dict[str, RaionState] | None) -> dict:
@@ -419,6 +503,8 @@ class RaionForecaster:
             "history_until": _iso(self.history.known_until()) if self.history else None,
             "share_period": [_iso(sp[0]), _iso(sp[1])] if sp else None,
             "models": self.model_info or None,
+            "models_source": self.source,
+            "models_source_uk": SOURCE_UK.get(self.source),
             "methods": METHOD_UK,
             "no_data": [{"id": r.id, "name_uk": r.name_uk, "oblast": r.oblast} for r in RAIONS if not forecastable(r)],
             "raions": rows,
