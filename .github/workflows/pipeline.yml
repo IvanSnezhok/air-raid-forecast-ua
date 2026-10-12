@@ -187,6 +187,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/pipeline.py history-check
+      - name: Refresh the threat-type label sources daily
+        # threat-labels.yml's daily cron never ran either: dispatch it once a day
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/pipeline.py daily-check --workflow threat-labels.yml
 
   deploy:
     needs: run

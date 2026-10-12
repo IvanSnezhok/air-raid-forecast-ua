@@ -76,14 +76,17 @@ def test_train_blockers_ignore_runs_older_than_a_fallback_bundle():
 def test_history_pull_is_dispatched_daily_and_when_the_record_lags():
     now = datetime(2026, 10, 12, 15, 0, tzinfo=timezone.utc)
     run = lambda created, status="completed": {"created_at": created, "status": status}  # noqa: E731
-    assert P.history_pull_reason(None, [], now) == "daily history pull"  # never pulled on this branch
-    assert "daily" in P.history_pull_reason(0.2, [run("2026-10-11T16:00:00Z")], now)  # 23 h ago
-    assert P.history_pull_reason(0.2, [run("2026-10-11T20:17:35Z")], now) is None  # 19 h ago, record current
+    assert P.dispatch_reason(None, [], now) == "daily run"  # never ran on this branch
+    assert "daily" in P.dispatch_reason(0.2, [run("2026-10-11T16:00:00Z")], now)  # 23 h ago
+    assert P.dispatch_reason(0.2, [run("2026-10-11T20:17:35Z")], now) is None  # 19 h ago, record current
     # 12 Oct: the record was complete only up to the dataset end, 10 h before the forecast
-    assert "10 h" in P.history_pull_reason(10.0, [run("2026-10-11T20:17:35Z")], now)
-    assert P.history_pull_reason(10.0, [run("2026-10-12T13:30:00Z")], now) is None  # pulled < 3 h ago
-    assert P.history_pull_reason(10.0, [run("2026-10-12T14:55:00Z", "in_progress")], now) is None
-    assert P.history_pull_reason(None, [run("2026-10-10T14:55:00Z", "queued")], now) is None
+    assert "10 h" in P.dispatch_reason(10.0, [run("2026-10-11T20:17:35Z")], now)
+    assert P.dispatch_reason(10.0, [run("2026-10-12T13:30:00Z")], now) is None  # pulled < 3 h ago
+    assert P.dispatch_reason(10.0, [run("2026-10-12T14:55:00Z", "in_progress")], now) is None
+    assert P.dispatch_reason(None, [run("2026-10-10T14:55:00Z", "queued")], now) is None
+    # threat-labels.yml: daily only (no lag); its last runs were pushes on 11 Oct
+    assert "daily" in P.dispatch_reason(None, [run("2026-10-11T10:28:13Z")], now)
+    assert P.dispatch_reason(None, [run("2026-10-12T06:40:00Z")], now) is None
 
 
 def test_raion_summary_counts_the_methods_served():
