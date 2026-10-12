@@ -13,10 +13,6 @@ name: train
 on:
   schedule:
     - cron: "37 4 * * *"
-  # TEMPORARY: test runs from the feature branch (schedules only run from main); removed before merge
-  push:
-    branches: [claude/dazzling-darwin-jlnlqj-automation]
-    paths: ["src/airraid/training.py", ".github/workflows/train.yml"]
   workflow_dispatch:
 
 concurrency:
