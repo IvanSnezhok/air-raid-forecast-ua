@@ -220,6 +220,8 @@ def forecast(alerts: pd.DataFrame, now: pd.Timestamp, store_root: Path | None = 
     log = log.assign(issued_at=issued_at, live=bool(token) or len(gap) > 0 or seen is not None,
                      trained_until=trained_until, hist_end=hist_end, git_sha=git_sha(), text_status=text_status)
     why = explain.frame(parts, origin).assign(issued_at=issued_at, text_status=text_status) if parts else None
+    if why is not None and text_root is not None and text is None:  # asked for, but no text model could be loaded
+        why["text"] = why["text"].replace("off", "no_model")
     if store_root is not None and not as_of:
         store.append(store_root, "forecasts", log)
         if why is not None:
