@@ -11,7 +11,10 @@ the output to the `threat-labels-data` branch:
    threat caused an alert in which oblast.
 2. Kaggle "Massive Missile Attacks on Ukraine" (piterfm, built from the Air
    Force morning reports): per attack, time window, weapon model, launched
-   count. Used to tell a massed drone attack from a few drones.
+   count. Used to tell a massed drone attack from a few drones. Published with a
+   delay of a day or more, so it is never a forecast feature; the main model takes
+   launch counts from the Air Force morning summaries, which carry their own
+   publish time.
 
     python threat-type/fetch_sources.py --since 2025-01-01 --out data
 """
@@ -20,7 +23,6 @@ from __future__ import annotations
 import argparse
 import io
 import json
-import re
 import sys
 import time
 import urllib.error
@@ -29,16 +31,20 @@ import zipfile
 from pathlib import Path
 
 import pandas as pd
-from bs4 import BeautifulSoup
 
-UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from airraid.text.telegram import UA, parse_page  # noqa: E402,F401  (one parser for the whole project)
+
 KAGGLE_URL = "https://www.kaggle.com/api/v1/datasets/download/piterfm/massive-missile-attacks-on-ukraine"
+# Kaggle answers a browser User-Agent with an HTML page instead of the zip
+# (the old "BadZipFile" error); a plain client UA gets the file anonymously.
+KAGGLE_UA = "python-urllib/3 air-raid-forecast-ua"
 
 
-def get(url: str, tries: int = 6) -> bytes:
+def get(url: str, tries: int = 6, ua: str = UA) -> bytes:
     for i in range(tries):
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            req = urllib.request.Request(url, headers={"User-Agent": ua})
             with urllib.request.urlopen(req, timeout=60) as r:
                 return r.read()
         except urllib.error.HTTPError as e:
@@ -52,34 +58,6 @@ def get(url: str, tries: int = 6) -> bytes:
                 continue
             raise
     raise RuntimeError("unreachable")
-
-
-def parse_page(html: str, channel: str) -> list[dict]:
-    """Posts on one t.me/s/<channel> page: id, UTC time, edited flag, text."""
-    soup = BeautifulSoup(html, "html.parser")
-    out = []
-    for m in soup.select("div.tgme_widget_message[data-post]"):
-        post = m["data-post"]
-        if not post.lower().startswith(channel.lower() + "/"):
-            continue
-        t = m.select_one("a.tgme_widget_message_date time[datetime]") or m.select_one("time[datetime]")
-        if t is None:
-            continue
-        txt = m.select_one("div.tgme_widget_message_text")
-        if txt:
-            for br in txt.find_all("br"):
-                br.replace_with("\n")
-        text = txt.get_text("").strip() if txt else ""
-        meta = m.select_one("span.tgme_widget_message_meta")
-        edited = bool(meta and "edited" in meta.get_text(" ", strip=True).lower())
-        out.append({
-            "channel": channel,
-            "id": int(post.split("/")[1]),
-            "date": pd.Timestamp(t["datetime"]).tz_convert("UTC"),
-            "edited": edited,
-            "text": text,
-        })
-    return out
 
 
 def scrape_channel(channel: str, since: pd.Timestamp, max_minutes: float, pause: float = 1.0) -> pd.DataFrame:
@@ -107,7 +85,7 @@ def scrape_channel(channel: str, since: pd.Timestamp, max_minutes: float, pause:
 
 
 def fetch_kaggle(out: Path) -> list[str]:
-    raw = get(KAGGLE_URL)
+    raw = get(KAGGLE_URL, ua=KAGGLE_UA)
     names = []
     with zipfile.ZipFile(io.BytesIO(raw)) as z:
         for n in z.namelist():
@@ -147,7 +125,11 @@ def main() -> int:
             report[f"{ch}_error"] = repr(e)
             continue
         if old is not None:
-            df = pd.concat([old, df], ignore_index=True).drop_duplicates("id", keep="last").sort_values("id")
+            # keep the text as first seen: a later edit must not rewrite what was public before
+            # (the full point-in-time record, with edits, is in the text-data archive)
+            edited = pd.concat([old, df]).groupby("id")["edited"].any()
+            df = pd.concat([old, df], ignore_index=True).drop_duplicates("id", keep="first").sort_values("id")
+            df["edited"] = df["id"].map(edited).astype(bool)
             df = df[df["date"] >= since].reset_index(drop=True)
         df.to_parquet(out / f"tg_{ch}.parquet", index=False)
         report[ch] = {"posts": len(df), "first": str(df["date"].min()), "last": str(df["date"].max())}

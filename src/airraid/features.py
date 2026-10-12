@@ -2,12 +2,18 @@
 
 Forecast setup
 --------------
-At every forecast origin T (top of a UTC hour), for every region r and horizon
-h in HORIZONS we predict two targets:
+At every forecast origin T (any whole minute; training uses top-of-hour
+origins), for every region r and horizon h in HORIZONS we predict two targets:
   * active: region r has an alert at any moment of the hour [T+(h-1)h, T+h h);
   * onset:  a new alert starts in region r within [T, T+h h).
 "active" is easy at short horizons because alerts persist; "onset" is the
 harder, more useful question ("will we get a new alert soon?").
+
+"Hours" are 60-minute blocks of the grid, which `data.build_grid` aligns so
+that they end at the grid's `data_end`: for an origin at 14:20 the lags are the
+blocks 13:20-14:20, 12:20-13:20, ..., hour 1 is 14:20-15:20. All features and
+labels below are written in these blocks, so they mean the same thing for an
+origin at :00 and at :20 (the calendar features use the block's midpoint).
 
 No-leakage contract
 -------------------
@@ -67,8 +73,13 @@ def origin_hours(grid: AlertGrid, start: pd.Timestamp, end: pd.Timestamp) -> np.
     return np.arange(k0, k1, dtype=np.int64)
 
 
-def build_features(grid: AlertGrid, K: np.ndarray, H: np.ndarray | None = None) -> pd.DataFrame:
-    """Features for every (origin hour in K, region). Horizon-independent part."""
+def build_features(grid: AlertGrid, K: np.ndarray, H: np.ndarray | None = None, spatial: bool = True) -> pd.DataFrame:
+    """Features for every (origin hour in K, region). Horizon-independent part.
+
+    `spatial=False` leaves out the per-region state columns (now__*, lag1__*), which
+    the raion model replaces with oblast and neighbour aggregates (119 raions would
+    add 238 columns).
+    """
     if H is None:
         H = hourly_fraction(grid)
     R = len(grid.regions)
@@ -122,7 +133,7 @@ def build_features(grid: AlertGrid, K: np.ndarray, H: np.ndarray | None = None) 
     # Spatial picture: state of every other region (lets the model learn which
     # regions "lead" which, instead of us hand-coding a neighbour map).
     lag1 = H[:, K - 1]
-    for j, reg in enumerate(grid.regions):
+    for j, reg in enumerate(grid.regions if spatial else []):
         key = reg.replace(" oblast", "").replace(" ", "_")
         cols[f"now__{key}"] = np.broadcast_to(now[j].astype(np.float32), (R, len(K)))
         cols[f"lag1__{key}"] = np.broadcast_to(lag1[j], (R, len(K)))
@@ -141,7 +152,9 @@ def add_horizon_features(df: pd.DataFrame, grid: AlertGrid, H: np.ndarray, h: in
     K = out["origin_hour"].to_numpy()
     r = pd.Categorical(out["region"], categories=grid.regions).codes
     target_hour = K + h - 1
-    ts = grid.t0 + pd.to_timedelta(target_hour, unit="h")
+    # Kyiv hour / weekday of the middle of the target block: for top-of-hour
+    # origins this is the block's own hour; for 14:50 it is 15 (block 14:50-15:50).
+    ts = grid.t0 + pd.to_timedelta(target_hour, unit="h") + pd.Timedelta(minutes=30)
     local = ts.tz_convert(KYIV)
     out["target_hour_local"] = local.hour.astype(np.int16)
     out["target_dow"] = local.dayofweek.astype(np.int16)

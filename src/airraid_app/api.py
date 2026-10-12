@@ -5,6 +5,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -92,7 +93,7 @@ def create_app(settings: Settings | None = None, engine: ForecastEngine | None =
     async def forecast():
         f = await _forecast()
         t = await run_in_threadpool(engine.threats.get)
-        return {k: v for k, v in f.items() if k != "regions"} | {
+        return {k: v for k, v in f.items() if k not in ("regions", "raions")} | {
             "threats": _threats_meta(t),
             "regions": [{**{k: r[k] for k in ("id", "name", "name_uk", "active_at_origin", "probs")},
                          "types": (t or {}).get("regions", {}).get(r["name"])} for r in f["regions"]],
@@ -121,10 +122,56 @@ def create_app(settings: Settings | None = None, engine: ForecastEngine | None =
             "verification": (await run_in_threadpool(engine.verification, match["name"]))["recent"],
         }
 
+    async def _raions() -> tuple[dict, dict]:
+        f = await _forecast()
+        r = f.get("raions")
+        if not r:
+            raise HTTPException(503, detail={"status": engine.status, "message": "raion layer is not available"})
+        return f, r
+
+    @app.get("/api/raions", tags=["raions"], summary="Райони: хто під тривогою зараз і прогноз на 1-6 год")
+    async def raions():
+        f, r = await _raions()
+        return {k: v for k, v in r.items()} | {"horizons": f["horizons"], "windows": f["windows"],
+                                               "origin_kyiv": f["origin_kyiv"]}
+
+    @app.get("/api/raions/{raion_id}", tags=["raions"], summary="Один район: стан, прогноз, метод і його якість")
+    async def raion(raion_id: str):
+        f, r = await _raions()
+        match = next((x for x in r["raions"] if x["id"] == raion_id), None)
+        if match is None:
+            raise HTTPException(404, detail=f"unknown or not forecast raion '{raion_id}'")
+        oblast = next((x for x in f["regions"] if x["name"] == match["oblast"]), None)
+        return {
+            **match,
+            "origin": f["origin"], "origin_kyiv": f["origin_kyiv"], "windows": f["windows"],
+            "live_source": r["live_source"], "live_as_of": r["live_as_of"], "share_period": r["share_period"],
+            "history_until": r["history_until"], "methods": r["methods"], "tier": r["tier"], "models": r["models"],
+            "oblast_probs": oblast["probs"] if oblast else None,
+            "oblast_active_at_origin": oblast["active_at_origin"] if oblast else None,
+            "evaluation": engine.raions.evaluation_for(match["oblast"]),
+        }
+
     @app.get("/api/verification", tags=["evaluation"], summary="Перевірка виданих прогнозів: що справдилось")
     async def verification():
         _ready()
         return await run_in_threadpool(engine.verification)
+
+    @app.get("/api/status", tags=["service"], summary="Коли оновлено дані і прогноз")
+    async def status():
+        """When the data and the forecast were last updated (the UI warns when this is over 30 min old).
+
+        The static site publishes the pipeline's own status.json at this path instead
+        (scripts/pipeline.py status: step timings, data ends, verification counts)."""
+        f = await _forecast()
+        now = pd.Timestamp.now(tz="UTC")
+        live = await run_in_threadpool(engine.live_state)
+        return {
+            "updated_at": now.isoformat(), "source": "server",
+            "origin": f["origin"], "issued_at": f.get("issued_at") or now.isoformat(),
+            "last_poll": live.as_of.isoformat() if live.source == "alerts.in.ua" else None,
+            "dataset_end": f["history_end"], "model": f["model"],
+        }
 
     @app.get("/api/metrics", tags=["evaluation"], summary="Якість моделей")
     def metrics():
