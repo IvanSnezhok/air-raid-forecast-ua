@@ -16,6 +16,10 @@ hour T:
 A **raion (district) layer** adds which raions are under alert now and a 1–6 h forecast for
 each of the 119 raions with data, evaluated on its own: see [Raion level](#raion-level-districts).
 
+The web UI ([GitHub Pages](https://ivansnezhok.github.io/air-raid-forecast-ua/), or the
+FastAPI app: [`docs/web-app.md`](docs/web-app.md)) is in **English by default** with a
+Ukrainian switch (EN / UK in the header, remembered per viewer, or `?lang=uk`).
+
 ## Quick start
 
 ```bash
@@ -426,25 +430,33 @@ became known). Files are never rewritten, so git grows only by new rows.
 
 ## Raion level (districts)
 
-The web map can switch from oblasts to **raions** (the 136 districts after the 2020
-reform, plus Kyiv City and Sevastopol): which raions are under alert right now (the
-whole raion, or only some of its hromadas), a 1–6 h forecast for every raion, and a
-**"До тривог"** button that zooms the map to the raions under alert, in all oblasts or in
-one. Clicking a raion opens its live state and forecast, with the method behind every
-number. Screenshots and API: [`docs/web-app.md`](docs/web-app.md#райони).
+Picking an oblast on the web map zooms to it and breaks it down into its **raions** (the
+136 districts after the 2020 reform, plus Kyiv City and Sevastopol): which raions are under
+alert right now (the whole raion, or only some of its hromadas: striped), since when, and
+a 1/3/6 h forecast for every raion with the method behind the number; clicking a raion
+opens its own panel. The "Raions" view colours the whole country by raion, and **"To
+alerts"** zooms the map to the raions under alert, in all oblasts or in one. The page is
+in English by default, with a Ukrainian switch (EN / UK, remembered per viewer,
+`?lang=uk|en`). Screenshots and API: [`docs/web-app.md`](docs/web-app.md#райони).
 
-![raions under alert](docs/img/app-raions-now.png)
+![Kyiv Oblast broken down into raions](docs/img/app-oblast-raions.png)
 ![raion panel: forecast, method and its test quality](docs/img/app-raion-detail.png)
 
 ### Geometry and names
 
-* `scripts/build_map.py --only raions` → `src/airraid_app/static/raions-map.json`
-  (370 KB, 127 KB gzipped) from the OCHA/HDX **COD-AB** boundaries of Ukraine, v05, valid
-  on 2025-09-01 (State Scientific Production Enterprise "Kartographia", **CC BY-IGO**,
-  [`raions-map.LICENSE.txt`](src/airraid_app/static/raions-map.LICENSE.txt)). Neighbours
-  share their border vertices, so borders are cut into arcs and every arc is simplified
-  once (as TopoJSON does): no gaps or slivers between raions. The Chornobyl exclusion zone
-  is drawn as part of Vyshhorodskyi raion, which it belongs to since 2020.
+* `scripts/build_map.py` → `src/airraid_app/static/ukraine-map.json` (country view, loaded
+  with the page: 150 KB, 51 KB gzipped) and `ukraine-map-detail.json` (loaded the first time
+  the map zooms in: 290 KB, 83 KB gzipped), both from the OCHA/HDX **COD-AB** boundaries of
+  Ukraine, v05, valid on 2025-09-01 (State Scientific Production Enterprise "Kartographia",
+  **CC BY 3.0 IGO**, [`ukraine-map.LICENSE.txt`](src/airraid_app/static/ukraine-map.LICENSE.txt)).
+  Neighbours share their border vertices, so borders are cut into arcs and every arc is
+  simplified once (as TopoJSON does, 0.3 km / 45 m tolerance for the two levels): no gaps or
+  slivers between raions. The **oblasts are the raions dissolved** (the same arcs), so oblast
+  and raion borders coincide exactly; Kyiv City is a real outline cut out of Kyiv Oblast.
+  The files store the arcs once (delta-encoded integers) and the rings as arc indices; the
+  UI builds the SVG paths. The Chornobyl exclusion zone is drawn as part of Vyshhorodskyi
+  raion, which it belongs to since 2020. `tests/app/test_map_geometry.py` checks
+  completeness, closed rings, no overlaps and that every oblast equals its dissolved raions.
 * `src/airraid/raions.py`: one row per unit with the HDX pcode, the oblast, the English
   name of the official alert file and the Ukrainian title and location UID of
   alerts.in.ua. **Mapping completeness** (`tests/app/test_raion_map.py`): all 118 raions of the
@@ -606,7 +618,8 @@ stopping on the same month); the test numbers above are not.
 ### Commands
 
 ```bash
-python scripts/build_map.py --only raions   # raion geometry + neighbour list (outputs committed)
+python scripts/build_map.py                 # oblast + raion geometry, two levels of detail (outputs committed;
+                                            # --write-neighbours also rewrites the raion neighbour list)
 python raion_run.py --threads 2             # official-file walk-forward → reports/raions/ (~1–2 h on 4 cores)
 git worktree add live-data origin/live-data
 python raion_latest.py --store live-data    # latest 4 weeks with alerts.in.ua labels → reports/raions/latest_*
