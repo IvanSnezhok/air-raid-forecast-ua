@@ -78,9 +78,8 @@ def test_map_covers_every_dataset_region():
     from airraid_app.regions import UK_NAMES
 
     geo = json.loads((Path(__file__).resolve().parents[2] / "src/airraid_app/static/ukraine-map.json").read_text())
-    drawn = set(geo["regions"]) | {"Kyiv City"}
-    assert set(UK_NAMES) - EXCLUDED_REGIONS <= drawn
-    assert set(geo["labels"]) >= set(UK_NAMES) - EXCLUDED_REGIONS
+    assert set(UK_NAMES) - EXCLUDED_REGIONS <= set(geo["oblasts"])  # Kyiv City is a real outline now
+    assert set(geo["meta"]["oblasts"]) == set(geo["oblasts"])
 
 
 def test_metrics_with_walk_forward_reports(settings, engine, tmp_path):

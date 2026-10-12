@@ -1,8 +1,8 @@
 """Raions (districts) of Ukraine after the 2020 reform: ids, names and alert-source mappings.
 
 One row per map unit: 136 raions plus Kyiv City and Sevastopol (cities with special
-status). Geometry: src/airraid_app/static/raions-map.json, built by
-scripts/build_map.py from the OCHA/HDX COD-AB boundaries (CC BY-IGO, State
+status). Geometry: src/airraid_app/static/ukraine-map.json (+ ukraine-map-detail.json),
+built by scripts/build_map.py from the OCHA/HDX COD-AB boundaries (CC BY 3.0 IGO, State
 Scientific Production Enterprise "Kartographia", valid on 2025-09-01). The
 Chornobyl exclusion zone is drawn as part of Vyshhorodskyi raion, which it
 belongs to administratively since 2020.

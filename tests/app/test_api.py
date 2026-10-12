@@ -28,6 +28,8 @@ def test_forecast_shape_and_range(client):
     body = client.get("/api/forecast").json()
     assert body["horizons"] == list(HORIZONS)
     assert body["live_source"] == "dataset" and body["warnings"]
+    # the same warnings as language-neutral codes, translated by the UI
+    assert len(body["warning_codes"]) == len(body["warnings"]) and body["warning_codes"][0]["code"] == "no_live"
     assert len(body["regions"]) == len(REGIONS)
     for r in body["regions"]:
         for t in ("active", "onset"):
@@ -73,9 +75,11 @@ def test_metrics(client):
 
 def test_ui_is_served(client):
     r = client.get("/")
-    assert r.status_code == 200 and "Повітряні тривоги" in r.text
+    assert r.status_code == 200 and "Air raid alerts" in r.text and '<html lang="en">' in r.text
+    assert 'data-lang="uk"' in r.text and "Як це працює" in r.text  # the Ukrainian version is on the same page
     assert client.get("/static/app.js").status_code == 200
-    assert client.get("/static/ukraine-map.json").json()["regions"]
+    assert client.get("/static/ukraine-map.json").json()["oblasts"]
+    assert client.get("/static/i18n.js").status_code == 200
 
 
 def test_not_ready_returns_503(settings):
@@ -85,7 +89,8 @@ def test_not_ready_returns_503(settings):
     from airraid_app.engine import ForecastEngine
 
     with TestClient(create_app(settings, ForecastEngine(settings))) as c:
-        assert c.get("/api/forecast").status_code == 503
+        r = c.get("/api/forecast")
+        assert r.status_code == 503 and r.json()["detail"]["message_code"] == {"code": "starting"}  # the UI translates the code
         assert c.get("/api/health").json()["status"] == "starting"
 
 

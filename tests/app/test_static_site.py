@@ -19,3 +19,9 @@ def test_build_static_site(settings, tmp_path):
         assert (out / "api" / "regions" / f"{reg['id']}.json").exists()
     assert not (out / "api" / "threats.json").exists()
     assert (out / "static" / "app.js").exists() and (out / "static" / "ukraine-map.json").exists()
+    assert (out / "static" / "ukraine-map-detail.json").exists() and (out / "static" / "i18n.js").exists()
+    # the "API" paragraph of both language versions points to the JSON files
+    for lang in ("en", "uk"):
+        start = html.index(f'<p id="api-note-{lang}">')
+        assert 'href="api/raions.json"' in html[start:html.index("</p>", start)]
+    assert 'href="/docs"' not in html

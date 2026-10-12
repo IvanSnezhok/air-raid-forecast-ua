@@ -36,13 +36,17 @@ from airraid_app.api import STATIC, create_app  # noqa: E402
 from airraid_app.config import Settings  # noqa: E402
 from airraid_app.engine import ForecastEngine  # noqa: E402
 
-STATIC_API_NOTE = (
-    '<p>Усі дані сторінки доступні як JSON (оновлюються разом зі збіркою сайту): '
+_API_LINKS = (
     '<a href="api/state.json">state</a>, <a href="api/forecast.json">forecast</a>, '
     '<a href="api/regions.json">regions</a>, <a href="api/raions.json">raions</a>, '
     '<a href="api/metrics.json">metrics</a>, <a href="api/verification.json">verification</a>, '
-    '<a href="api/status.json">status</a>.</p>'
+    '<a href="api/status.json">status</a>.'
 )
+# The "API" paragraph of the How-it-works page (one per UI language) points to the JSON files instead of /docs.
+STATIC_API_NOTES = {
+    "en": f'<p id="api-note-en">All the page data is available as JSON (updated with every build of the site): {_API_LINKS}</p>',
+    "uk": f'<p id="api-note-uk">Усі дані сторінки доступні як JSON (оновлюються разом зі збіркою сайту): {_API_LINKS}</p>',
+}
 
 
 def build(out: Path, settings: Settings, status: Path | None = None) -> None:
@@ -92,9 +96,10 @@ def build(out: Path, settings: Settings, status: Path | None = None) -> None:
 
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     html = html.replace("<head>", '<head>\n<meta name="airraid-static" content="1">', 1)
-    start = html.index('<p>Усі дані сторінки доступні як JSON')
-    end = html.index("</p>", start) + 4
-    html = html[:start] + STATIC_API_NOTE + html[end:]
+    for lang, note in STATIC_API_NOTES.items():
+        start = html.index(f'<p id="api-note-{lang}">')
+        end = html.index("</p>", start) + 4
+        html = html[:start] + note + html[end:]
     (out / "index.html").write_text(html, encoding="utf-8")
     (out / ".nojekyll").write_text("")
     logging.info("site written to %s", out)

@@ -14,7 +14,7 @@ from airraid.raion_neighbours import NEIGHBOURS
 from airraid.raions import BY_ID, BY_UID, NO_DATA_OBLASTS, RAIONS, forecastable, from_alerts_in_ua, from_official
 
 ROOT = Path(__file__).resolve().parents[2]
-GEO = json.loads((ROOT / "src/airraid_app/static/raions-map.json").read_text(encoding="utf-8"))
+GEO = json.loads((ROOT / "src/airraid_app/static/ukraine-map.json").read_text(encoding="utf-8"))
 
 
 def test_registry_is_the_post_2020_raion_set():
@@ -28,14 +28,15 @@ def test_registry_is_the_post_2020_raion_set():
 
 
 def test_every_unit_has_geometry_and_vice_versa():
-    assert set(GEO["raions"]) == {r.id for r in RAIONS}
-    for rid, g in GEO["raions"].items():
-        assert g["d"].startswith("M") and g["d"].endswith("Z"), rid
+    assert set(GEO["raions"]) == set(GEO["meta"]["raions"]) == {r.id for r in RAIONS}
+    for rid, rings in GEO["raions"].items():
+        assert rings and all(rings), rid
+        g = GEO["meta"]["raions"][rid]
         x0, y0, x1, y1 = g["bbox"]
         assert x0 < x1 and y0 < y1
         assert x0 - 1 <= g["label"][0] <= x1 + 1 and y0 - 1 <= g["label"][1] <= y1 + 1, rid
-        assert g["name_uk"] == BY_ID[rid].name_uk
-    assert GEO["oblast_borders"] and "CC BY-IGO" in GEO["attribution"]
+        assert g["name_uk"] == BY_ID[rid].name_uk and g["name"] == BY_ID[rid].name and g["oblast"] == BY_ID[rid].oblast
+    assert GEO["borders"] and all("CC BY 3.0 IGO" in a for a in GEO["attribution"].values())
 
 
 def test_alerts_in_ua_uids_cover_every_raion_outside_crimea():

@@ -22,6 +22,14 @@ jobs:
       - run: pip install -e ".[dev]"
       - name: Web app tests (synthetic data, offline)
         run: pytest tests/app -q
+      - name: Web UI in a browser (English by default, no Ukrainian left in EN mode, language switch, phone width)
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"  # the runner's Google Chrome is used
+          AIRRAID_UI_CHANNEL: chrome
+          AIRRAID_UI_REQUIRED: "1"
+        run: |
+          npm install --no-save --no-package-lock --prefix "$RUNNER_TEMP/pw" playwright@1.56.1
+          AIRRAID_UI_NODE_PATH="$RUNNER_TEMP/pw/node_modules" pytest tests/app/test_ui_browser.py -q
       - name: No-leakage tests (downloads the dataset)
         run: pytest tests/test_leakage.py -q
       - name: Live data (merge definition, point-in-time store, verification)

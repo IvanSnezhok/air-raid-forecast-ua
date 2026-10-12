@@ -38,8 +38,9 @@ class LiveState:
     source: str  # "alerts.in.ua" or "dataset"
     as_of: pd.Timestamp  # moment the state describes (UTC)
     regions: dict[str, RegionState]
-    error: str | None = None  # why the live API was not used, if it failed
+    error: str | None = None  # why the live API was not used, if it failed (Ukrainian text)
     alerts: list[LiveAlert] = field(default_factory=list)  # every record of the poll, all levels and types
+    error_code: dict | None = None  # the same as a language-neutral code + parameters, for the UI
 
     def ongoing_alerts(self) -> pd.DataFrame:
         """Ongoing alerts as rows (region, start) to append to the history."""
@@ -75,7 +76,8 @@ def state_from_alerts(alerts: list[LiveAlert], regions: list[str], now: pd.Times
     return LiveState("alerts.in.ua", now, states, alerts=alerts)
 
 
-def state_from_dataset(alerts: pd.DataFrame, regions: list[str], error: str | None = None) -> LiveState:
+def state_from_dataset(alerts: pd.DataFrame, regions: list[str], error: str | None = None,
+                       error_code: dict | None = None) -> LiveState:
     """Alerts running at the last moment covered by the dataset."""
     as_of = alerts["start"].max()
     states = {r: RegionState(False) for r in regions}
@@ -83,4 +85,4 @@ def state_from_dataset(alerts: pd.DataFrame, regions: list[str], error: str | No
     for region, start in running.groupby("region")["start"].min().items():
         if region in states:
             states[region] = RegionState(True, start, reported=True)
-    return LiveState("dataset", as_of, states, error)
+    return LiveState("dataset", as_of, states, error, error_code=error_code)
