@@ -81,7 +81,9 @@ def test_history_pull_is_dispatched_daily_and_when_the_record_lags():
     assert P.dispatch_reason(0.2, [run("2026-10-11T20:17:35Z")], now) is None  # 19 h ago, record current
     # 12 Oct: the record was complete only up to the dataset end, 10 h before the forecast
     assert "10 h" in P.dispatch_reason(10.0, [run("2026-10-11T20:17:35Z")], now)
-    assert P.dispatch_reason(10.0, [run("2026-10-12T13:30:00Z")], now) is None  # pulled < 3 h ago
+    assert P.dispatch_reason(10.0, [run("2026-10-12T14:30:00Z")], now) is None  # pulled < 1 h ago
+    # 16:03 the first dispatch found every oblast pulled < 20 h ago (nothing pulled): retry an hour later
+    assert "10 h" in P.dispatch_reason(10.0, [run("2026-10-12T16:03:31Z")], now + timedelta(hours=2, minutes=10))
     assert P.dispatch_reason(10.0, [run("2026-10-12T14:55:00Z", "in_progress")], now) is None
     assert P.dispatch_reason(None, [run("2026-10-10T14:55:00Z", "queued")], now) is None
     # threat-labels.yml: daily only (no lag); its last runs were pushes on 11 Oct
