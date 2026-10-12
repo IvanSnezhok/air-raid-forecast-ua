@@ -14,14 +14,19 @@ trained at top-of-hour origins, see the same feature definitions at any minute.
 """
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pandas as pd
 
+from . import explain as why
 from .data import AlertGrid, build_grid
 from .features import HORIZONS, add_horizon_features, build_features, hourly_fraction, hourly_starts
 from .live_alerts import gap_alerts
 from .models import feature_columns
 from .training import CLIM_COL, TARGETS
+
+log = logging.getLogger("airraid")
 
 
 def origin_after(seen: pd.Timestamp) -> pd.Timestamp:
@@ -38,13 +43,18 @@ def feature_grid(alerts: pd.DataFrame, origin: pd.Timestamp, records: pd.DataFra
     return build_grid(hist[hist["start"] < origin], data_end=origin), gap
 
 
-def predict(models: dict, grid: AlertGrid, text=None, text_rows: pd.DataFrame | None = None) -> pd.DataFrame:
+def predict(models: dict, grid: AlertGrid, text=None, text_rows: pd.DataFrame | None = None,
+            explain: list | None = None) -> pd.DataFrame:
     """Forecast at the grid's end (the origin) for every region, target and horizon.
 
     Long frame: origin, region, target, horizon, p, clim (28-day climatology of
     the same window, the reference forecast), active_now, model (which model
     served: "lightgbm", or "lightgbm_text" when `text` (airraid.text.serving.
     TextServing) can serve with the text features `text_rows` at the origin).
+
+    With a list `explain`, the "why" of every forecast (airraid.explain: Telegram
+    effect, grouped drivers of the served model, live signals) is appended to it,
+    computed from the same feature rows; a failure there never stops the forecast.
     """
     H, S = hourly_fraction(grid), hourly_starts(grid)
     k_now = grid.n_minutes // 60
@@ -62,6 +72,11 @@ def predict(models: dict, grid: AlertGrid, text=None, text_rows: pd.DataFrame | 
                 p, served = text.predict(x, t, h, text_rows, fallback=m)
             else:
                 p, served = m.predict(x), "lightgbm"
+            if explain is not None:
+                try:
+                    explain.append(why.explain(x, t, h, m, p, served, text, text_rows))
+                except Exception as e:  # noqa: BLE001 - the explanation is optional
+                    log.warning("no explanation for %s h%d: %r", t, h, e)
             rows.append(pd.DataFrame({
                 "origin": origin, "region": x["region"].to_numpy(), "target": t, "horizon": h,
                 "p": np.round(p, 4), "clim": x[CLIM_COL[t]].to_numpy().astype(float).round(4),

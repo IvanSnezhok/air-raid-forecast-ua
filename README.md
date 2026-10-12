@@ -34,6 +34,18 @@ likely to be (shares add up to 100%; not the chance of an alert). Every forecast
 short line saying this and a "?" with the full definition; details and screenshots in
 [`docs/web-app.md`](docs/web-app.md#що-означають-відсотки).
 
+**Why this forecast.** Every oblast panel explains its numbers, from exactly the inputs the served
+model saw at the forecast moment (`src/airraid/explain.py`, logged with the forecast to the store
+kind `explanations`): the history-only probability next to the one shown when the Telegram model
+served ("Telegram & news: 32% → 41%, +9 pp"), or why it did not; the served LightGBM's TreeSHAP
+contributions (`pred_contrib`) summed into a few groups (alert now, own recent alerts, other
+oblasts, time and usual level, Telegram for the oblast, Telegram nationwide), shown as bars that
+push up or down with the factor on the odds (they add up in log-odds, not percentage points);
+and a few live Telegram signals as counts. A raion panel shows its method and its oblast's
+drivers. The "How it works" page is a short diagram plus a table of where the Telegram model
+serves and what it gained (from `reports/text_selection.json` and `text_ablation_diff.csv`, via
+`/api/method`). Screenshots: [`docs/web-app.md`](docs/web-app.md#чому-такий-прогноз).
+
 **History tab** (`#history`): every issued forecast checked against what happened (headline
 scores vs climatology and persistence over 24 h / 7 days, skill over time, reliability, an
 hour-by-hour forecast-vs-outcome chart per oblast, the latest checked forecasts) and the state
@@ -421,6 +433,8 @@ live-data/<kind>/<YYYY-MM-DD>/<stamp>-<hash>.parquet   one immutable file per ap
                   calibration ("platt" | "none"), clim, active_now, trained_until, hist_end, git_sha, live
   verification    scored forecasts, verified_at, label_source, brier_model, brier_raw
   calibration     recalibration map per target x horizon (a, b, active, reason, check-day Brier), fitted_at
+  explanations    why each forecast (src/airraid/explain.py), issued_at as in forecasts: served
+                  model, p, history-only p_hist, reason, base + grouped log-odds drivers, signal counts
 live-data/_state/history.json   collector bookkeeping (resume, If-Modified-Since)
 live-data/_state/pipeline.json  the last pipeline run: time, step timings, data ends (= the site's api/status.json)
 ```

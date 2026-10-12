@@ -27,7 +27,10 @@ Live records are turned into oblast-level alerts with the same definition and
 never change anything before the end of the dataset.
 
 Every forecast is appended to reports/forecast_log.csv and, with --store, to the
-point-in-time store (`forecasts`) so verify.py can score it.
+point-in-time store (`forecasts`) so verify.py can score it. Its explanation
+(airraid.explain: the history-only probability next to the served one, the
+served model's drivers in a few groups, the live Telegram signals; all from the
+same feature rows) goes to the store kind `explanations` with the same issued_at.
 
 Learning from verified forecasts (airraid.recalibration): with --store, the
 newest recalibration map known at the origin (fitted by verify.py from forecasts
@@ -54,7 +57,7 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
-from airraid import nowcast, recalibration, store, training  # noqa: E402
+from airraid import explain, nowcast, recalibration, store, training  # noqa: E402
 from airraid.data import download, load_alerts  # noqa: E402
 from airraid.live_alerts import OBLAST_EN as UK_TO_EN  # noqa: E402,F401  (old import name)
 from airraid.live_alerts import KEY, LIVE_EXPIRY_HOURS, fetch_active, parse_active, store_records, to_frame  # noqa: E402
@@ -216,7 +219,8 @@ def forecast(alerts: pd.DataFrame, now: pd.Timestamp, store_root: Path | None = 
     if text_root is not None:
         text, text_rows, text_status = text_model(text_root, None if as_of else model_dir, alerts, hist_end, grid,
                                                   threads, as_of, text_fetch, reports_dir)
-    log = nowcast.predict(models, grid, text, text_rows)
+    parts: list[pd.DataFrame] = []
+    log = nowcast.predict(models, grid, text, text_rows, explain=parts)
     # learning from verified forecasts: the newest recalibration map known at the origin (verify.py
     # fitted it from forecasts verified before then); `p_raw` keeps the model's own probability
     cal = recalibration.latest(store_root, origin) if store_root is not None else None
@@ -228,8 +232,16 @@ def forecast(alerts: pd.DataFrame, now: pd.Timestamp, store_root: Path | None = 
     issued_at = pd.Timestamp.now(tz="UTC").floor("s")
     log = log.assign(issued_at=issued_at, live=bool(token) or len(gap) > 0 or seen is not None,
                      trained_until=trained_until, hist_end=hist_end, git_sha=git_sha(), text_status=text_status)
+    why = explain.frame(parts, origin).assign(issued_at=issued_at, text_status=text_status) if parts else None
+    if why is not None and text_root is not None and text is None:  # asked for, but no text model could be loaded
+        why["text"] = why["text"].replace("off", "no_model")
     if store_root is not None and not as_of:
         store.append(store_root, "forecasts", log)
+        if why is not None:
+            try:
+                store.append(store_root, "explanations", why)
+            except Exception as e:  # noqa: BLE001 - the forecast is logged; its explanation is optional
+                print(f"WARNING: explanation not stored: {e!r}")
     local = origin.tz_convert("Europe/Kyiv")
     return log, {
         "origin_kyiv": f"{local:%Y-%m-%d %H:%M}",
@@ -244,6 +256,7 @@ def forecast(alerts: pd.DataFrame, now: pd.Timestamp, store_root: Path | None = 
         "live_api": bool(token),
         "model_served": ",".join(served),
         "text_status": text_status,
+        "explained": 0 if why is None else int(len(why)),
         "calibration_active": n_cal,
         "calibration_fitted_at_utc": None if cal is None else f"{cal['fitted_at'].max():%Y-%m-%d %H:%M}",
     }

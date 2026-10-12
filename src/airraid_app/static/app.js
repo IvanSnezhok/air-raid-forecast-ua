@@ -164,6 +164,7 @@ function setLang(lang) {
   applyStatic();
   renderAttr();
   $("#region-list").innerHTML = "";
+  if (S.view === "about") renderAbout();
   if (!S.forecast) return;
   render();
   renderPanel();
@@ -219,9 +220,9 @@ const pctSmall = (p) => (p != null && p > 0 && p < 0.005 ? "<1%" : pct(p));
 // what is forecast (an air raid alert of any type), both targets with their time windows, what a
 // percentage means (a calibrated probability), the risk words and how the history charts differ.
 const OPEN = new Set();  // ids of the explanations the viewer opened; kept across re-renders
-function infoBtn(id) {
-  return `<button type="button" class="info-btn" aria-expanded="${OPEN.has(id)}" aria-controls="${id}" title="${esc(t("info.btn"))}">`
-    + `<span aria-hidden="true">?</span><span class="sr">${t("info.btn")}</span></button>`;
+function infoBtn(id, label = t("info.btn")) {
+  return `<button type="button" class="info-btn" aria-expanded="${OPEN.has(id)}" aria-controls="${id}" title="${esc(label)}">`
+    + `<span aria-hidden="true">?</span><span class="sr">${label}</span></button>`;
 }
 function levelsText() {
   const cuts = LEVEL_CUTS.slice(0, -1).map((x) => Math.round(x * 100));
@@ -610,8 +611,8 @@ function paintLegend() {
     const stops = [0, 0.2, 0.4, 0.6, 0.8, 1].map((p) => `${rampColor(p)} ${p * 100}%`).join(",");
     const tg = S.unit === "raion" ? rTarget() : S.target;
     lg.innerHTML = `<span>0%</span><span class="bar" style="background:linear-gradient(90deg,${stops})"></span><span>100%</span>
-      <span class="lg-what">${tg === "active" ? t("legend.probActive") : t("legend.probOnset")}${S.unit === "raion" ? t("legend.raionZoom") : ""}</span>
-      <span class="lg-hint muted">${t("legend.pctHint")}</span>`;
+      <span class="lg-what" title="${esc(t("legend.pctHint"))}">${tg === "active" ? t("legend.probActive") : t("legend.probOnset")}${S.unit === "raion" ? t("legend.raionZoom") : ""} ${infoBtn("ex-legend")}</span>
+      ${explainHTML("ex-legend", S.forecast?.windows, { raion: S.unit === "raion" })}`;
   }
 }
 
@@ -775,16 +776,6 @@ function renderSummary() {
     const exp = fc.regions.reduce((s, r) => s + (r.probs.active[1] || 0), 0);
     tiles.push(`<div class="stat"><div class="k">${t("sum.expected")}</div>
       <div class="v">≈ ${exp.toFixed(1)} <small>${t("sum.oblasts")}</small></div><div class="s">${t("sum.expectedNote")}</div></div>`);
-    const h3 = fc.horizons.includes(3) ? 3 : fc.horizons[0];
-    const top = [...fc.regions].sort((a, b) => b.probs.onset[h3] - a.probs.onset[h3])[0];
-    if (top) {
-      tiles.push(`<div class="stat"><div class="k">${t("sum.top", { h: h3 })}</div>
-        <div class="v">${pct(top.probs.onset[h3])} <small>${esc(oblShort(top.name))}</small></div>
-        <div class="s">${t("sum.asOf", { time: fmtFull.format(new Date(fc.origin)) })}</div></div>`);
-    }
-    tiles.push(`<div class="stat"><div class="k">${t("sum.trained")}</div>
-      <div class="v" style="font-size:18px">${fc.model?.trained_at ? fmtFull.format(new Date(fc.model.trained_at)) : "–"}</div>
-      <div class="s">${t("sum.historyTo", { time: fmtFull.format(new Date(fc.history_end)) })}</div></div>`);
   }
   $("#summary").innerHTML = tiles.join("");
 }
@@ -795,16 +786,13 @@ function renderHeadline() {
   const on = st.regions.filter(isOn);
   const live = st.source === "alerts.in.ua";
   const when = live ? t("head.now") : t("head.at", { time: fmtTime.format(new Date(st.as_of)) });
-  let a = on.length
-    ? t("head.alerts", { when, n: on.length, list: esc(listJoin(on.map((r) => oblShort(r.name)))) })
-    : t("head.none", { when });
+  let a = on.length ? t("head.alerts", { when, n: on.length }) : t("head.none", { when });
   const h = fc.horizons.includes(3) ? 3 : fc.horizons[0];
   const quiet = fc.regions.filter((r) => !on.some((x) => x.id === r.id));
   const top = [...quiet].sort((x, y) => y.probs.onset[h] - x.probs.onset[h]).filter((r) => r.probs.onset[h] >= 0.4).slice(0, 3);
   a += " " + (top.length
     ? t("head.next", { h, list: top.map((r) => `${esc(oblShort(r.name))} <b>${pct(r.probs.onset[h])}</b>`).join(", ") })
     : t("head.nextNone", { h }));
-  if (liveRaions() && activeRaions().length) a += " " + t("head.raions", { n: activeRaions().length });
   $("#headline").innerHTML = a;
   const dl = $("#region-list");
   if (!dl.childElementCount) {
@@ -906,7 +894,7 @@ const pbar = (p) => (p == null ? "–" : `<div class="pbar"><div class="track"><
 function probsTable(d, hs) {
   const w = d.windows;
   const rows = hs.map((h) => `<tr><th scope="row" class="h">${t("probs.hour", { h })}<br><span class="small">${fmtTime.format(new Date(w[h].active[0]))}–${fmtTime.format(new Date(w[h].active[1]))}</span></th>
-      <td>${pbar(d.probs.active[h])}</td><td>${pbar(d.probs.onset[h])}</td></tr>`).join("");
+      ${["active", "onset"].map((tg) => `<td${whyCell(tg, h)}>${pbar(d.probs[tg][h])}</td>`).join("")}</tr>`).join("");
   return `<table class="probs"><thead><tr><th></th><th scope="col">${t("probs.active")}</th><th scope="col">${t("probs.onset")}</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
@@ -929,10 +917,11 @@ function renderDetail(d) {
     <p>${t("brief.onset", { h: h3, level: level(po), p: pct(po) })}</p>${typeLine}</div>`;
   $("#detail").innerHTML = `
     <h2>${esc(oblFull(d.name))}</h2>${status}${locs}${brief}
-    <p class="small muted">${t(S.state?.source === "alerts.in.ua" ? "detail.srcLive" : "detail.srcDataset")}; ${t("detail.origin", { time: fmtTime.format(new Date(d.origin)) })}</p>
+    <p class="small muted">${t(S.state?.source === "alerts.in.ua" ? "detail.srcLive" : "detail.srcDataset")} · ${t("detail.origin", { time: fmtTime.format(new Date(d.origin)) })}</p>
     <h3>${t("detail.forecast")}</h3>
     ${pctNote("ex-region", "detail.note", d.windows, { types: !!(d.types && S.forecast?.threats) })}
     ${probsTable(d, hs)}
+    <section class="why" id="why" aria-live="polite">${whyHTML(d.why, d.probs, d.origin)}</section>
     ${raionListHTML(d.name)}
     ${typesHTML(d.types)}
     <p class="small"><a href="#stats" class="jump">${t("detail.toStats")}</a></p>`;
@@ -1869,17 +1858,17 @@ function renderRaionDetail(d) {
     const latestHTML = latestRows ? `<p class="small muted">${t("raion.latest", { period: lt.test ? ` (${fmtDay.format(new Date(lt.test[0]))} – ${fmtDay.format(new Date(lt.test[1]))})` : "" })}</p>
       <div class="tablewrap"><table class="mt">${head}<tbody>${latestRows}</tbody></table></div>` : "";
     const oblKey = `bss_${evalName(d.method.onset[3])}`;
-    evHTML = `<h3>${t("raion.trust")}</h3>
+    evHTML = `<details class="more"><summary>${t("raion.trust")}</summary>
       <p class="small muted">${t("raion.trustNote", { period: per })}</p>
       <div class="tablewrap"><table class="mt">${head}
       <tbody>${line("active", 1)}${line("onset", 1)}${line("onset", 3)}${line("onset", 6)}</tbody></table></div>
       ${latestHTML}
-      ${obl && obl[oblKey] !== undefined ? `<p class="small muted">${t("raion.oblScore", { name: esc(oblGen(d.oblast)), rate: pct(obl.base_rate), bss: signedPct(obl[oblKey]), method: t(`method.${d.method.onset[3]}`) })}</p>` : ""}`;
+      ${obl && obl[oblKey] !== undefined ? `<p class="small muted">${t("raion.oblScore", { name: esc(oblGen(d.oblast)), rate: pct(obl.base_rate), bss: signedPct(obl[oblKey]), method: t(`method.${d.method.onset[3]}`) })}</p>` : ""}</details>`;
   }
   $("#detail").innerHTML = `
     <p class="crumbs small"><a href="#region/${esc(d.oblast_id)}" data-oblast="${esc(d.oblast_id)}">${esc(oblFull(d.oblast))}</a> › ${t("raion.crumb")}</p>
     <h2>${esc(raionName(d.id, d))}</h2>${status}${locs}
-    <p class="small muted">${d.live_source ? t("raion.src", { time: fmtTime.format(new Date(d.live_as_of)) }) : t("raion.srcNone")};
+    <p class="small muted">${d.live_source ? t("raion.src", { time: fmtTime.format(new Date(d.live_as_of)) }) : t("raion.srcNone")} ·
       ${t("raion.asOf", { time: fmtTime.format(new Date(d.origin)) })}</p>
     <div class="detail-actions"><button type="button" class="zbtn" id="zoom-this">${t("raion.zoom")}</button>
       <button type="button" class="zbtn" id="back-oblast">${t("raion.back", { name: esc(oblFull(d.oblast)) })}</button></div>
@@ -1887,8 +1876,11 @@ function renderRaionDetail(d) {
     <p class="small">${t("raion.from")} ${[...methods].map(mtag).join(" ")}</p>
     ${pctNote("ex-raion", "raion.note", d.windows, { raion: true })}
     ${probsTable(d, hs)}
-    <p class="small muted">${[...methods].map((m) => `${quote(t(`method.${m}`))}: ${t(`methodLong.${m}`)}`).join("<br>")}</p>
-    ${cmp}${shareNote}${evHTML}`;
+    ${cmp}
+    <details class="more"><summary>${t("raion.methodMore")}</summary>
+      <p class="small muted">${[...methods].map((m) => `${quote(t(`method.${m}`))}: ${t(`methodLong.${m}`)}`).join("<br>")}</p>${shareNote}</details>
+    ${evHTML}
+    <section class="why" id="why" aria-live="polite">${raionWhyHTML(d)}</section>`;
   $("#zoom-this").addEventListener("click", () => zoomTo(raionMeta(d.id)?.bbox, 0.1));
   const back = (ev) => { ev.preventDefault(); select(d.oblast_id); };
   $("#detail .crumbs a").addEventListener("click", back);
@@ -1915,6 +1907,156 @@ function renderRaionRank() {
   $("#rank-note").innerHTML = pctNote("ex-rank", "rank.noteRaions", S.forecast?.windows, { raion: true });
 }
 
+// ---------------------------------------------------------------- why this forecast (oblast and raion panels)
+// d.why (api/regions/{id}; a raion panel gets its oblast's as oblast_why), per target and horizon:
+// the served model and probability, the history-only probability (Telegram effect) and the drivers:
+// log-odds contributions of the served LightGBM summed into a few groups (airraid.explain). A bar is the
+// push up or down; ×/÷ is the factor on the odds (exp of the contribution). They add up in log-odds,
+// so they are never shown as percentage points.
+const WHY_MIN = 0.05;   // |log-odds| below this (odds changed by less than 5%) is not drawn
+const WHY_TOP = 6;
+let WHYSEL = null;      // {t, h} picked in the block or in the forecast table; null: follow the map controls
+
+function whyPick(w) {
+  const items = w?.items || {};
+  let tg = WHYSEL?.t || (S.layer === "forecast" && S.target !== "type" ? S.target : "onset");
+  if (!items[tg]) tg = Object.keys(items)[0];
+  const hs = Object.keys(items[tg] || {}).map(Number).sort((a, b) => a - b);
+  let h = WHYSEL?.h ?? (S.layer === "forecast" && S.target !== "type" ? S.horizon : 3);
+  if (!hs.includes(h)) h = hs.includes(3) ? 3 : hs[0];
+  return { tg, h, hs };
+}
+// a cell of the forecast table that explains itself when tapped
+function whyCell(tg, h) {
+  const w = S.panel?.kind === "raion" ? S.panel.data.oblast_why : S.panel?.data?.why;
+  if (!w?.items?.[tg]?.[h]) return "";
+  const cur = whyPick(w);
+  return ` class="whyc${cur.tg === tg && cur.h === h ? " picked" : ""}" data-why-t="${tg}" data-why-h="${h}" tabindex="0" title="${esc(t("why.pick"))}"`;
+}
+const oddsFactor = (v) => { const f = Math.exp(Math.abs(v)); return f >= 9.95 ? f.toFixed(0) : f.toFixed(1); };
+const agoText = (m) => (m >= 60 ? t("dur.hm", { h: Math.floor(m / 60), m: m % 60 }) : t("dur.m", { m }));
+function sigText(x) {
+  switch (x.code) {
+    case "reg_threat": return t(x.w === 60 ? "sig.regThreat60" : "sig.regThreat180", { threat: t(`sigThreat.${x.threat}`), n: x.n });
+    case "reg_clear": return t("sig.regClear", { n: x.n });
+    case "reg_last": return t("sig.regLast", { ago: agoText(x.min) });
+    case "reg_quiet": return t("sig.regQuiet");
+    case "platform": return t("sig.platform", { ago: agoText(x.min) });
+    case "national": return t("sig.national", { ago: agoText(x.min) });
+    case "launch": return t("sig.launch", { n: x.n });
+    case "massed": return t("sig.massed");
+    case "explosion": return t("sig.explosion", { n: x.n });
+    case "nat_regions": return t("sig.natRegions", { n: x.n });
+    case "summary": return t("sig.summary", { drones: x.drones, missiles: x.missiles, h: x.age_h });
+    default: return "";
+  }
+}
+function whyHTML(w, probs, origin, { title = t("why.title"), lead = "" } = {}) {
+  const head = `<h3><span>${title}</span> ${infoBtn("ex-why", t("why.help"))}</h3>
+    <div class="explain" id="ex-why"${OPEN.has("ex-why") ? "" : " hidden"}><p>${t("why.ex.tg")}</p><p>${t("why.ex.drivers")}</p>
+      <p>${t("why.ex.signals")}</p><p><a href="#about">${t("why.help")} →</a></p></div>${lead}`;
+  if (!w?.items) return `${head}<p class="small muted">${t("why.none")}</p>`;
+  const { tg, h, hs } = whyPick(w);
+  const it = w.items[tg]?.[h];
+  if (!it) return `${head}<p class="small muted">${t("why.none")}</p>`;
+  const shown = probs?.[tg]?.[h] ?? it.p;
+  const pick = `<div class="why-pick"><div class="seg sm" role="group" aria-label="${esc(t("ctl.target"))}">${["active", "onset"].filter((x) => w.items[x]).map((x) =>
+      `<button type="button" data-why-t="${x}" aria-pressed="${x === tg}">${t(x === "active" ? "ctl.active" : "ctl.onset")}</button>`).join("")}</div>
+    <div class="seg sm" role="group" aria-label="${esc(t("ctl.horizon"))}">${hs.map((x) =>
+      `<button type="button" data-why-h="${x}" aria-pressed="${x === h}">${t("h.n", { n: x })}</button>`).join("")}</div></div>`;
+  const q = `<p class="why-q">${t(`target.${tg}`, { h })}: <b>${pct(shown)}</b> ${level(shown)}</p>`;
+  let tgl;
+  if (it.text === "served" && it.p_hist != null) {
+    const dd = Math.round(it.p * 100) - Math.round(it.p_hist * 100);
+    const d = t("why.pp", { d: `${dd > 0 ? "+" : dd < 0 ? "−" : "±"}${Math.abs(dd)}` });
+    tgl = `<div class="why-tg" title="${esc(t("why.tgTitle"))}"><span class="k">${t("why.tgk")}</span>
+      <span class="v">${pct(it.p_hist)} → <b>${pct(it.p)}</b> <span class="dd ${dd > 0 ? "up" : dd < 0 ? "down" : ""}">${d}</span></span></div>`;
+  } else {
+    tgl = `<div class="why-tg off"><span class="k">${t("why.tgk")}</span><span class="v">${t(`why.tgNot.${it.text}`)}</span></div>`;
+  }
+  const calib = Math.abs(shown - it.p) >= 0.005 ? `<p class="small muted">${t("why.calib", { a: pct(it.p), b: pct(shown) })}</p>` : "";
+  const gs = Object.entries(it.groups || {}).filter(([, v]) => Math.abs(v) >= WHY_MIN)
+    .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, WHY_TOP);
+  const max = Math.max(1, ...gs.map(([, v]) => Math.abs(v)));
+  const bars = gs.map(([g, v]) => {
+    const up = v > 0, half = Math.max(1.5, (Math.abs(v) / max) * 50);
+    const tip = t(up ? "why.oddsUp" : "why.oddsDown", { x: oddsFactor(v) });
+    return `<li class="${up ? "up" : "down"}" title="${esc(tip)}"><span class="g">${t(`grp.${g}`)}</span>
+      <span class="bar" aria-hidden="true"><i style="left:${up ? 50 : 50 - half}%;width:${half}%"></i></span>
+      <span class="f"><span class="sr">${esc(tip)}</span><span aria-hidden="true">${up ? "×" : "÷"}${oddsFactor(v)}</span></span></li>`;
+  }).join("");
+  const drivers = `<div class="why-dh"><span class="k">${t("why.drivers")}</span>
+      <span class="small muted" title="${esc(t("why.startTitle"))}">${t("why.start", { p: pct(1 / (1 + Math.exp(-it.base))) })} → ${pct(it.p)}</span></div>
+    ${gs.length ? `<div class="why-axis small muted" aria-hidden="true"><span></span><span class="ax"><span>◀ ${t("why.lowers")}</span><span>${t("why.raises")} ▶</span></span><span></span></div><ul class="why-bars">${bars}</ul>` : ""}
+    ${Object.keys(it.groups || {}).length > gs.length ? `<p class="small muted">${t("why.small")}</p>` : ""}`;
+  const sig = w.has_text ? `<div class="why-dh"><span class="k">${t("why.signals", { time: fmtTime.format(new Date(origin)) })}</span></div>
+    ${w.signals?.length ? `<ul class="why-sig">${w.signals.map((x) => `<li>${sigText(x)}</li>`).join("")}</ul>` : `<p class="small muted">${t("why.noSignals")}</p>`}` : "";
+  return `${head}${pick}${q}${tgl}${calib}${drivers}${sig}`;
+}
+function raionWhyHTML(d) {
+  const ms = [...new Set(["active", "onset"].flatMap((tg) => Object.values(d.method?.[tg] || {})))];
+  const lead = `<p class="small">${t("why.raionMethod", { method: ms.map(mtag).join(" ") })}</p>`;
+  return whyHTML(d.oblast_why, d.oblast_probs, d.origin, { title: t("why.parent", { name: esc(oblFull(d.oblast)) }), lead });
+}
+function renderWhy() {
+  const box = $("#why"), p = S.panel;
+  if (!box || !p) return;
+  box.innerHTML = p.kind === "raion" ? raionWhyHTML(p.data) : whyHTML(p.data.why, p.data.probs, p.data.origin);
+  const w = p.kind === "raion" ? p.data.oblast_why : p.data.why;
+  const { tg, h } = whyPick(w);
+  for (const c of $("#detail").querySelectorAll("td[data-why-t]")) c.classList.toggle("picked", c.dataset.whyT === tg && Number(c.dataset.whyH) === h);
+}
+function setupWhy() {
+  const pick = (b) => {
+    const p = S.panel;
+    if (!p) return;
+    const cur = whyPick(p.kind === "raion" ? p.data.oblast_why : p.data.why);
+    WHYSEL = { t: b.dataset.whyT || cur.tg, h: b.dataset.whyH ? Number(b.dataset.whyH) : cur.h };
+    renderWhy();
+    if (b.tagName === "TD") $("#why")?.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "nearest" });
+  };
+  $("#detail").addEventListener("click", (ev) => { const b = ev.target.closest("[data-why-t], [data-why-h]"); if (b) pick(b); });
+  $("#detail").addEventListener("keydown", (ev) => {
+    const b = ev.target.closest?.("td[data-why-t]");
+    if (b && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); pick(b); }
+  });
+  // the map controls pick what the block explains until the viewer picks something in the panel
+  for (const id of ["#layer", "#target", "#horizon"]) $(id).addEventListener("click", () => { WHYSEL = null; requestAnimationFrame(renderWhy); });
+}
+
+// ---------------------------------------------------------------- how it works: the parts that come from data (api/method.json)
+let METHOD = null;
+const NEWS_NAME = { ukrinform: "Ukrinform", pravda: "Ukrainska Pravda", unian: "UNIAN", rbc: "RBC-Ukraine", gdelt: "GDELT" };
+function textStatusCode(st) {
+  if (!st || st === "off" || st.startsWith("off")) return "off";
+  if (st === "ok") return "ok";
+  if (/does not cover|features failed/.test(st)) return "no_archive";
+  return "no_model";
+}
+async function renderAbout() {
+  if (!METHOD) {
+    try { METHOD = await getJSON("/api/method"); } catch (_) { return; }  // not ready yet: the static text stays
+  }
+  const m = METHOD;
+  const chg = (v) => (v == null ? `<span class="muted">${t("meth.na")}</span>` : `${v < 0 ? "−" : "+"}${Math.abs(v * 100).toFixed(1)}%`);
+  const cls = (v) => (v == null ? "" : v < 0 ? "pos" : "neg");
+  const rows = (m.telegram || []).map((r) => `<tr class="${r.used ? "on" : "off"}"><td>${targetName(r.target, r.horizon)}</td>
+    <td>${r.used ? `<span class="tick">✓</span> ${t("meth.used")}` : `<span class="muted">– ${t("meth.notUsed")}</span>`}</td>
+    <td class="${cls(r.val_change)}">${chg(r.val_change)}</td>
+    <td class="${cls(r.test_change)}">${chg(r.test_change)}${r.test_verdict ? `<br><span class="small muted">${t(`meth.${r.test_verdict}`)}</span>` : ""}</td></tr>`).join("");
+  const per = m.test_period ? ` ${t("meth.period", { a: fmtDay.format(new Date(m.test_period[0])), b: fmtDay.format(new Date(m.test_period[1])) })}` : "";
+  const now = m.text_loaded || m.text_status ? `<p class="small meth-now">${t(`meth.now.${textStatusCode(m.text_status)}`)}</p>` : "";
+  const html = `${now}<div class="tablewrap"><table class="mt meth"><thead><tr><th>${t("meth.colWhat")}</th><th>${t("meth.colUsed")}</th>
+      <th>${t("meth.colVal")}</th><th>${t("meth.colTest")}</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <p class="small muted">${t("meth.note")}${per}</p>`;
+  for (const b of document.querySelectorAll("[data-method]")) b.innerHTML = html;
+  const news = (m.news?.sources || []).map((x) => NEWS_NAME[x] || x).join(", ");
+  const ch = (m.channels || []).map((c) => `<li><a href="https://t.me/s/${esc(c.id)}" rel="noopener">${esc(c.id)}</a> · ${t(`meth.ch.${c.id}`)}
+      <span class="mtag ${c.in_model ? "m-lightgbm" : "m-oblast"}">${t(c.in_model ? "meth.inModel" : "meth.liveOnly")}</span></li>`).join("")
+    + (news ? `<li>${t(m.news.in_model ? "meth.newsYes" : "meth.newsNo", { list: esc(news) })}</li>` : "");
+  for (const b of document.querySelectorAll("[data-method-ch]")) b.innerHTML = ch;
+}
+
 // ---------------------------------------------------------------- views & loading
 function setView() {
   const h = location.hash.replace("#", "") || "map";
@@ -1924,6 +2066,7 @@ function setView() {
   for (const v of ["map", "history", "metrics", "about"]) $(`#view-${v}`).hidden = v !== S.view || (v !== "about" && !$("#loading").hidden);
   if (S.view === "metrics" && $("#loading").hidden) renderMetrics();
   if (S.view === "history" && $("#loading").hidden) renderHistory();
+  if (S.view === "about") renderAbout();
   if (view === "region" && arg && S.forecast && (arg !== S.selected || S.rsel)) select(arg);
   if (view === "raion" && arg && arg !== S.rsel && S.raions) selectRaion(arg, { zoom: true });
   if (S.view === "map") requestAnimationFrame(drawCharts);
@@ -1938,7 +2081,8 @@ function render() {
   paintMap();
   renderRank();
   const up = updatedAt();
-  $("#foot-status").textContent = up ? t("foot.updated", { time: fmtTime.format(up) }) + (staleWarning() ? ` ${t("foot.stale")}` : "") : "";
+  $("#foot-status").textContent = (up ? t("foot.updated", { time: fmtTime.format(up) }) + (staleWarning() ? ` ${t("foot.stale")}` : "") : "")
+    + (S.forecast?.model?.trained_at ? ` · ${t("foot.model", { time: fmtFull.format(new Date(S.forecast.model.trained_at)), to: fmtFull.format(new Date(S.forecast.history_end)) })}` : "");
 }
 
 function loadingText(detail) {  // shown with textContent
@@ -1990,6 +2134,7 @@ async function main() {
   setupControls();
   setupMapEvents();
   setupChartTips();
+  setupWhy();
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
     readRamp();
     if (GEO.base && S.forecast) { buildMap(); render(); renderPanel(); }

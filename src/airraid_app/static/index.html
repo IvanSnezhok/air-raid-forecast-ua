@@ -122,203 +122,189 @@
     <div id="metrics"></div>
   </section>
 
-  <section id="view-about" class="view prose" hidden>
+  <section id="view-about" class="view about" hidden>
     <div data-lang="en" lang="en">
     <h2>How it works</h2>
-    <p>The service shows where an air raid alert is on right now and estimates the probability of an alert
-      in every oblast and raion 1, 2, 3 and 6 hours ahead. The data and the forecast are refreshed every 10 minutes:
-      each forecast is made from the moment of the latest alerts.in.ua poll, and "the first hour" means the next 60 minutes
-      from that moment. If an update is more than 30 minutes late, the page says so. This is a time-series analysis study project,
-      not an official source.</p>
+    <p class="lead">The chance of an air raid alert (any type) in every oblast and raion, 1–6 hours ahead, refreshed every 10 minutes.
+      A study project, not an official source.</p>
     <p class="note"><strong>Important.</strong> The forecast does not replace official signals. Always respond to the siren
-      and to the notifications of the official "Air Alert" app.</p>
+      and to the official "Air Alert" app.</p>
 
-    <h3>What is forecast: an air raid alert of any type</h3>
-    <p>The forecast is about the air raid alert itself, whatever the threat behind it: attack drones, cruise missiles,
-      ballistic missiles, guided bombs (KABs) or anything else. An alert declared anywhere in the oblast (for the whole oblast,
-      a raion or a hromada) counts for the oblast. The alert records do not say which threat caused an alert, so there is no
-      separate forecast for drones or missiles; the "Threat type" block is a different, conditional estimate (see below).</p>
+    <h3>From data to forecast</h3>
+    <ol class="flow" aria-label="How the forecast is made">
+      <li class="fl fl-s"><span class="fl-n">1</span><b>Sources</b>
+        <span>alerts.in.ua · every 10 min</span><span>Volunteer alert dataset · daily</span><span>Telegram channels, news · every 10 min</span></li>
+      <li class="fl fl-f"><span class="fl-n">2</span><b>Features</b><span>Only what was known at the forecast moment</span></li>
+      <li class="fl fl-m"><span class="fl-n">3</span><b>Models</b><span>History model (LightGBM)</span><span>+ Telegram model where it proved better</span></li>
+      <li class="fl fl-o"><span class="fl-n">4</span><b>Forecast</b><span>Oblasts, 1–6 h</span><span>→ raions</span></li>
+      <li class="fl fl-v"><span class="fl-n">5</span><b>Verification</b><span>Every forecast vs what happened</span></li>
+      <li class="fl fl-l"><span class="fl-n">6</span><b>Learning</b><span>A calibration layer trained on verified forecasts (<a href="#history">History</a>)</span></li>
+    </ol>
 
-    <h3>Two answers to two questions</h3>
-    <ul>
-      <li><strong>Alert in hour N</strong>: will the oblast be under alert for at least part of the N-th hour after the forecast moment
-        (for a forecast made at 14:20 the first hour is 14:20–15:20).
-        For the first hour this almost always depends on whether an alert is on now.</li>
-      <li><strong>New alert within N h</strong>: will a new alert start within the next N hours. This is the harder and
-        more useful question: "should I expect an alert soon?". An alert that is already on does not count.</li>
+    <h3>Two questions</h3>
+    <div class="qgrid">
+      <p><b>Alert in hour N</b> Under alert at any moment of the N-th hour from the forecast time. An alert already on counts.</p>
+      <p><b>New alert within N h</b> A new alert starts in the next N hours. One already on does not count.</p>
+      <p><b>70%</b> Of past forecasts like this, about 7 in 10 were followed by an alert.</p>
+    </div>
+    <p class="small muted">Risk words: low below 15%, moderate 15–39%, high 40–69%, very high 70% or more.</p>
+
+    <h3>Where Telegram and news are used</h3>
+    <div class="method" data-method></div>
+    <details class="more"><summary>Channels, signals and the no-leakage rule</summary>
+      <ul class="method-ch" data-method-ch></ul>
+      <p><b>Signals</b> (counted, never quoted): posts naming the oblast with drones, missiles, ballistic missiles,
+        guided bombs or an all-clear in the last 30 / 60 / 180 min; minutes since it was last named; nationwide: bomber and
+        MiG-31K take-offs, ballistic threats, launch reports, "massed attack" wording, how many oblasts were named,
+        the morning count of drones and missiles.</p>
+      <p><b>No leakage.</b> A post counts only from the moment it was public: its publish time, or the moment we first saw it
+        if it had already been edited. A news item counts from the moment we first saw it. Nothing after the forecast moment is
+        used; automated tests check this for every feature.</p>
+    </details>
+
+    <h3 id="about-why-en">Why this forecast</h3>
+    <ul class="ticks">
+      <li><b>Telegram &amp; news</b>: the history-only forecast → the one shown, e.g. 32% → 41% (+9 pp).</li>
+      <li><b>What moved it</b>: which inputs pushed the chance up or down. ×2 doubles the odds. The effects add up on the
+        log-odds scale, so they are not percentage points.</li>
+      <li><b>Telegram before HH:MM</b>: what the channels said about the oblast, as counts.</li>
     </ul>
 
-    <h3>What the percentages mean</h3>
-    <ul>
-      <li><strong>Forecast numbers are probabilities.</strong> "70%" means: of all past forecasts of about 70%, about 7 in 10
-        were followed by an alert, and 3 in 10 were not. The "Model quality" page checks this (the calibration chart).
-        A percentage is not a share of the oblast's territory, not a share of the hour and not how confident the model is.</li>
-      <li><strong>Risk words</strong> are ranges of that probability: low below 15%, moderate 15–39%, high 40–69%,
-        very high 70% or more.</li>
-      <li><strong>History charts</strong> ("The last 72 hours", the calendar, days of the week, a typical day) show what actually
-        happened: how much of each hour or day the oblast was under alert, or the share of days with an alert. In the
-        72-hour chart the bars left of "now" are that share; the bars right of it are the forecast probability.</li>
-      <li><strong>Threat type</strong> ("If an alert starts, what is it likely to be?"): a separate model, based on Air Force
-        messages, estimates which threat the next alert will be about, <em>if</em> one starts. Its percentages add up to 100%
-        across the types and are not the chance of an alert. Where shown, "chance of such an alert" is the chance of a new
-        alert within that time multiplied by the share of the type.</li>
-      <li><strong>Model quality</strong> percentages (for example "+25%") are scores: how much smaller the forecast error is
-        than that of a simple baseline.</li>
-    </ul>
-
-    <h3>Data</h3>
-    <ul>
-      <li>History: a volunteer dataset of alerts by oblast since the start of the full-scale invasion
-        (<a href="https://github.com/Vadimkin/ukrainian-air-raid-sirens-dataset" rel="noopener">Vadimkin/ukrainian-air-raid-sirens-dataset</a>),
-        updated about once a day.</li>
-      <li>Current state: <a href="https://alerts.in.ua" rel="noopener">alerts.in.ua</a>, if the server has an API token.
-        An alert in any raion or hromada marks the whole oblast, as in the historical data.
-        Without a token the page shows the state at the end of the dataset.</li>
-      <li>Raions: raion-level alert history from the "official" file of the same repository (updated until 7 September 2026)
-        and alerts.in.ua records. Oblast and raion boundaries: OCHA/HDX COD-AB (SSPE Kartographia, CC BY 3.0 IGO); the oblast
-        outlines are the raions merged, so both levels line up exactly.</li>
-    </ul>
-
-    <h3>Raions</h3>
-    <p>Pick an oblast on the map and the map zooms to it and shows its raions: red where the whole raion (or the whole
-      oblast) is under alert, striped where only some hromadas are. The oblast panel lists every raion with its live state,
-      since when, which hromadas, and its 1, 3 and 6 hour forecast; click a raion to open its own panel.
-      The "Raions" view colours the whole country by raion. "To alerts" zooms to the raions under alert: all of them
-      or only those of the oblast picked in the list next to it.</p>
-    <p>Each raion forecast says where it comes from: <strong>raion model</strong> (a separate model on raion data),
-      <strong>oblast × raion share</strong> (the oblast probability times the share of the oblast's alerts over 28 days that
-      reached this raion) or <strong>oblast forecast</strong> when there is no raion data. How these methods did on the latest
-      four weeks of raion data is shown in the raion panel.</p>
-
-    <h3>The model</h3>
-    <p>For each "target × horizon" pair a separate gradient boosting model (LightGBM) is trained on the latest months of history.
-      Features: whether an alert is on now and for how long, the time since the last one, the number of alerts in 6 h / a day / a week,
-      hourly activity over the last day, the share of alerts at the same hour of day over 7 and 28 days,
-      the day of week and the hour in Kyiv, and the state of every other oblast now and an hour ago. The model learns by itself
-      which oblasts "warn" about others.</p>
-    <p>Features are built only from what was known at the forecast moment. An automatic test checks this:
-      features computed on the full data must equal the features computed on data cut at the forecast moment.</p>
-
-    <h3>How quality is checked</h3>
-    <p>Before every training the last week is held out: the model learns on the data before it and forecasts it hour by hour,
-      as in real time. The result is compared with two simple baselines:</p>
-    <ul>
-      <li><strong>Climatology</strong>: the share of the last 28 days with an alert at this hour;</li>
-      <li><strong>Persistence</strong>: "what is now will be".</li>
-    </ul>
-    <p>Metrics: the Brier score (the mean squared error of the probability, lower is better), the Brier skill score against
-      climatology (above zero means the model beats the baseline) and ROC AUC. After the check the model is refitted on all data.</p>
-    <p>In addition, the service keeps every forecast it issued and, once the forecast hour has passed, compares it with what happened.
-      The results are on the "Model quality" page and in the statistics of every oblast ("Past forecasts and what happened").
-      The model is retrained daily on fresh data (a separate job outside the 10-minute cycle), so new alerts make it into training.</p>
-
-    <h3>Language</h3>
-    <p>The page is in English by default; the EN / UK switch in the header changes the language and is remembered in this browser.
-      A link can also set it: <code>?lang=uk</code> or <code>?lang=en</code>. Place names follow the official transliteration
-      (oblasts as "Kyiv Oblast", raions by their COD-AB English names, hromadas transliterated).</p>
+    <details class="more"><summary>The model in detail</summary>
+      <p>One gradient boosting model (LightGBM) per question and horizon, trained on the latest months of history.
+        Inputs: whether an alert is on now and for how long, the time since the last one, alerts in 6 h / a day / a week,
+        each of the last 24 hours, the share of alerts at the same hour over 7 and 28 days, the hour and day in Kyiv, and the
+        state of every other oblast now and an hour ago. The Telegram model adds the signals above and serves only where it
+        beat the history model on a validation month and the archive is fresh; otherwise the history model serves.</p>
+      <p>An automatic test checks that features computed on the full data equal those computed on data cut at the forecast
+        moment. The models are retrained daily on fresh data by a separate job.</p>
+    </details>
+    <details class="more"><summary>How quality is checked</summary>
+      <p>Before every training the last week is held out and forecast hour by hour, as if live, next to two baselines:
+        <b>climatology</b> (share of the last 28 days with an alert at this hour) and <b>persistence</b> ("what is now will be").
+        Metrics: Brier score (lower is better), Brier skill score against climatology (above zero beats it) and ROC AUC.
+        Every live forecast is also stored and checked against what happened once its hour has passed. Results: <a href="#history">History</a>.</p>
+    </details>
+    <details class="more"><summary>Raions</summary>
+      <p>Pick an oblast to see its raions: red where the whole raion is under alert, striped where only some hromadas are.
+        A raion forecast comes from a <b>raion model</b>, from <b>oblast × raion share</b> (the oblast probability times the share
+        of the oblast's alerts over 28 days that reached this raion) or from the <b>oblast forecast</b> when there is no raion data.
+        The raion panel shows how each method did on the latest four weeks.</p>
+    </details>
+    <details class="more"><summary>Other numbers on the page</summary>
+      <p><b>History charts</b> (72 hours, calendar, weekdays, a typical day) show what happened: how much of each hour or day was
+        under alert, or the share of days with an alert. <b>Threat type</b> is a separate model: if an alert starts, which threat
+        it is likely to be; its shares add up to 100% and are not the chance of an alert. <b>Model quality</b> percentages are
+        scores: how much smaller the error is than that of a baseline.</p>
+    </details>
+    <details class="more"><summary>Data, licences, language</summary>
+      <ul>
+        <li>History: volunteer dataset of alerts by oblast
+          (<a href="https://github.com/Vadimkin/ukrainian-air-raid-sirens-dataset" rel="noopener">Vadimkin/ukrainian-air-raid-sirens-dataset</a>),
+          updated about once a day. Live state: <a href="https://alerts.in.ua" rel="noopener">alerts.in.ua</a>; an alert in any
+          raion or hromada marks the whole oblast, as in the history.</li>
+        <li>Raions: the "official" raion file of the same repository (until 7 September 2026) and alerts.in.ua. Boundaries:
+          OCHA/HDX COD-AB (SSPE Kartographia, CC BY 3.0 IGO).</li>
+        <li>Telegram: public channels through the t.me web preview; news: RSS feeds.</li>
+        <li>Language: EN / UK in the header, remembered in this browser; <code>?lang=uk</code> or <code>?lang=en</code> in a link.</li>
+      </ul>
+    </details>
 
     <h3>API</h3>
     <p id="api-note-en">All the page data is available as JSON: <a href="/docs">/docs</a> (interactive documentation),
-      <code>/api/state</code>, <code>/api/forecast</code>, <code>/api/regions/{id}</code>, <code>/api/raions</code>, <code>/api/metrics</code>.</p>
+      <code>/api/state</code>, <code>/api/forecast</code>, <code>/api/regions/{id}</code>, <code>/api/raions</code>, <code>/api/metrics</code>, <code>/api/method</code>.</p>
     <p class="muted small">Code: <a href="https://github.com/IvanSnezhok/air-raid-forecast-ua" rel="noopener">github.com/IvanSnezhok/air-raid-forecast-ua</a></p>
     </div>
 
     <div data-lang="uk" lang="uk">
     <h2>Як це працює</h2>
-    <p>Сервіс показує, де повітряна тривога триває зараз, і оцінює ймовірність тривоги
-      в кожній області та районі на 1, 2, 3 і 6 годин уперед. Дані і прогноз оновлюються кожні 10 хвилин:
-      кожен прогноз зроблено від моменту останнього опитування alerts.in.ua, «перша година» означає наступні 60 хвилин
-      від цього моменту. Якщо оновлення затримується понад 30 хвилин, сторінка про це попереджає. Це навчальний проєкт з аналізу часових рядів,
-      а не офіційне джерело.</p>
+    <p class="lead">Ймовірність повітряної тривоги (будь-якого типу) в кожній області й районі на 1–6 годин уперед, оновлення кожні 10 хвилин.
+      Навчальний проєкт, не офіційне джерело.</p>
     <p class="note"><strong>Важливо.</strong> Прогноз не замінює офіційних сигналів. Завжди реагуйте на сирену
       і сповіщення застосунку «Повітряна тривога».</p>
 
-    <h3>Що прогнозуємо: повітряну тривогу будь-якого типу</h3>
-    <p>Прогноз стосується самої повітряної тривоги, хоч би яка загроза за нею стояла: ударні дрони, крилаті ракети,
-      балістика, керовані авіабомби (КАБ) чи щось інше. Тривога, оголошена будь-де в області (на всю область, на район
-      чи на громаду), рахується для області. Записи тривог не кажуть, яка загроза спричинила тривогу, тому окремого
-      прогнозу для дронів чи ракет немає; блок «Тип загрози» це інша, умовна оцінка (див. нижче).</p>
+    <h3>Від даних до прогнозу</h3>
+    <ol class="flow" aria-label="Як робиться прогноз">
+      <li class="fl fl-s"><span class="fl-n">1</span><b>Джерела</b>
+        <span>alerts.in.ua · кожні 10 хв</span><span>Волонтерський датасет тривог · щодня</span><span>Telegram-канали, новини · кожні 10 хв</span></li>
+      <li class="fl fl-f"><span class="fl-n">2</span><b>Ознаки</b><span>Лише те, що було відомо в момент прогнозу</span></li>
+      <li class="fl fl-m"><span class="fl-n">3</span><b>Моделі</b><span>Модель історії (LightGBM)</span><span>+ модель з Telegram, де вона виявилась кращою</span></li>
+      <li class="fl fl-o"><span class="fl-n">4</span><b>Прогноз</b><span>Області, 1–6 год</span><span>→ райони</span></li>
+      <li class="fl fl-v"><span class="fl-n">5</span><b>Перевірка</b><span>Кожен прогноз проти того, що сталося</span></li>
+      <li class="fl fl-l"><span class="fl-n">6</span><b>Навчання</b><span>Шар калібрування, навчений на перевірених прогнозах (<a href="#history">Історія</a>)</span></li>
+    </ol>
 
-    <h3>Дві відповіді на два питання</h3>
-    <ul>
-      <li><strong>Тривога в годину N</strong>: чи буде область під тривогою хоча б частину N-ї години від моменту прогнозу
-        (для прогнозу від 14:20 перша година це 14:20–15:20).
-        На першу годину це майже завжди залежить від того, чи триває тривога зараз.</li>
-      <li><strong>Нова тривога протягом N год</strong>: чи почнеться нова тривога в найближчі N годин. Це складніше і
-        корисніше питання: «чи варто чекати тривоги найближчим часом?». Тривога, що вже триває, не рахується.</li>
+    <h3>Два питання</h3>
+    <div class="qgrid">
+      <p><b>Тривога в годину N</b> Під тривогою хоча б мить N-ї години від моменту прогнозу. Тривога, що вже триває, рахується.</p>
+      <p><b>Нова тривога протягом N год</b> Нова тривога почнеться в найближчі N годин. Та, що вже триває, не рахується.</p>
+      <p><b>70%</b> З минулих таких прогнозів приблизно після 7 з 10 тривога справді була.</p>
+    </div>
+    <p class="small muted">Слова ризику: низька менше 15%, помірна 15–39%, висока 40–69%, дуже висока 70% і більше.</p>
+
+    <h3>Де використано Telegram і новини</h3>
+    <div class="method" data-method></div>
+    <details class="more"><summary>Канали, сигнали і правило без витоку</summary>
+      <ul class="method-ch" data-method-ch></ul>
+      <p><b>Сигнали</b> (рахуємо, не цитуємо): дописи, що згадують область з дронами, ракетами, балістикою, КАБами чи відбоєм
+        за останні 30 / 60 / 180 хв; скільки хвилин минуло від останньої згадки; по країні: зліт бомбардувальників і МіГ-31К,
+        загроза балістики, повідомлення про пуски, слова «масована атака», скільки областей згадано, ранкова кількість дронів і ракет.</p>
+      <p><b>Без витоку.</b> Допис рахується лише з моменту, коли він став публічним: час публікації або момент, коли ми вперше
+        його побачили, якщо він уже був відредагований. Новина рахується з моменту, коли ми вперше її побачили. Нічого після
+        моменту прогнозу не використовується; автоматичні тести перевіряють це для кожної ознаки.</p>
+    </details>
+
+    <h3 id="about-why-uk">Чому такий прогноз</h3>
+    <ul class="ticks">
+      <li><b>Telegram і новини</b>: прогноз моделі лише з історією → показаний прогноз, напр. 32% → 41% (+9 в. п.).</li>
+      <li><b>Що на нього вплинуло</b>: які входи підняли чи знизили ймовірність. ×2 подвоює шанси. Впливи додаються в
+        лог-шансах, тому це не відсоткові пункти.</li>
+      <li><b>Telegram до ГГ:ХХ</b>: що канали писали про область, у вигляді лічильників.</li>
     </ul>
 
-    <h3>Що означають відсотки</h3>
-    <ul>
-      <li><strong>Числа прогнозу це ймовірності.</strong> «70%» означає: з усіх минулих прогнозів близько 70% приблизно
-        після 7 з 10 тривога справді була, а після 3 з 10 не було. Це перевіряє сторінка «Якість моделі» (графік калібрування).
-        Відсоток не є часткою території області, часткою години чи тим, наскільки модель упевнена.</li>
-      <li><strong>Слова ризику</strong> це діапазони цієї ймовірності: низька менше 15%, помірна 15–39%, висока 40–69%,
-        дуже висока 70% і більше.</li>
-      <li><strong>Графіки історії</strong> («Останні 72 години», календар, дні тижня, типова доба) показують, що сталося
-        насправді: яку частину кожної години чи доби область була під тривогою, або частку днів з тривогою. На графіку
-        за 72 години стовпчики ліворуч від «зараз» це така частка, праворуч прогнозована ймовірність.</li>
-      <li><strong>Тип загрози</strong> («Якщо тривога почнеться, якою вона найімовірніше буде?»): окрема модель за повідомленнями
-        Повітряних сил оцінює, про яку загрозу буде наступна тривога, <em>якщо</em> вона почнеться. Її відсотки разом дають 100%
-        між типами і не є ймовірністю тривоги. Там, де показано, «ймовірність такої тривоги» це ймовірність нової тривоги
-        за цей час, помножена на частку типу.</li>
-      <li><strong>Відсотки на сторінці «Якість моделі»</strong> (наприклад «+25%») це оцінки якості: наскільки помилка прогнозу
-        менша, ніж у простого орієнтира.</li>
-    </ul>
-
-    <h3>Дані</h3>
-    <ul>
-      <li>Історія: волонтерський датасет тривог по областях з початку повномасштабного вторгнення
-        (<a href="https://github.com/Vadimkin/ukrainian-air-raid-sirens-dataset" rel="noopener">Vadimkin/ukrainian-air-raid-sirens-dataset</a>),
-        оновлюється приблизно раз на добу.</li>
-      <li>Поточний стан: <a href="https://alerts.in.ua" rel="noopener">alerts.in.ua</a>, якщо сервер має токен API.
-        Тривога в будь-якому районі чи громаді позначає всю область, як і в історичних даних.
-        Без токена показано стан на кінець датасету.</li>
-      <li>Райони: історія тривог по районах з «офіційного» файлу того самого репозиторію (оновлювався до 7 вересня 2026)
-        і записи alerts.in.ua. Межі областей і районів: OCHA/HDX COD-AB (ДНВП «Картографія», CC BY 3.0 IGO); контури
-        областей отримано злиттям районів, тому межі обох рівнів збігаються.</li>
-    </ul>
-
-    <h3>Райони</h3>
-    <p>Оберіть область на мапі, і мапа наблизиться до неї та покаже її райони: червоним райони, де тривога на весь район
-      (або на всю область), смугами райони, де тривога лише в частині громад. Панель області показує кожен район: чи триває
-      тривога, з якого часу, які громади, і прогноз на 1, 3 і 6 год; клік по району відкриває його панель.
-      Перемикач «Райони» фарбує всю країну по районах. Кнопка «До тривог» наближає мапу до районів під тривогою:
-      до всіх або лише в області, обраній у списку поруч.</p>
-    <p>Прогноз для району позначено, звідки він: <strong>модель району</strong> (окрема модель на районних даних),
-      <strong>область × частка району</strong> (ймовірність тривоги в області, помножена на те, яку частку тривог області
-      за 28 днів мав цей район) або <strong>прогноз області</strong>, коли районних даних немає. Як ці способи показали себе на
-      останніх чотирьох тижнях з районними даними, видно в деталях району.</p>
-
-    <h3>Модель</h3>
-    <p>Для кожної пари «ціль × горизонт» навчається окремий градієнтний бустинг (LightGBM) на останніх місяцях історії.
-      Ознаки: чи триває тривога зараз і скільки триває, скільки минуло від останньої, кількість тривог за 6 год / добу / тиждень,
-      погодинна активність за останню добу, частка тривог у ту саму годину доби за 7 і 28 днів,
-      день тижня і година за Києвом, а також стан усіх інших областей зараз і годину тому. Модель сама вчиться,
-      які області «попереджають» інші.</p>
-    <p>Ознаки будуються лише з того, що було відомо в момент прогнозу. Це перевіряє автоматичний тест:
-      ознаки, пораховані на повних даних, мають збігатися з ознаками, порахованими на даних, обрізаних у момент прогнозу.</p>
-
-    <h3>Як ми перевіряємо якість</h3>
-    <p>Перед кожним навчанням останній тиждень відкладається: модель вчиться на даних до нього і прогнозує його погодинно,
-      як у реальному часі. Результат порівнюється з двома простими орієнтирами:</p>
-    <ul>
-      <li><strong>Кліматологія</strong>: частка днів за останні 28, коли в цю годину була тривога;</li>
-      <li><strong>Персистентність</strong>: «що зараз, те й буде».</li>
-    </ul>
-    <p>Метрики: Brier score (середня квадратична помилка ймовірності, менше краще), Brier skill score відносно кліматології
-      (більше нуля означає, що модель краща за орієнтир) і ROC AUC. Після перевірки модель перенавчається на всіх даних.</p>
-    <p>Крім того, сервіс зберігає кожен виданий прогноз і, коли прогнозована година минає, звіряє його з тим, що сталося насправді.
-      Результати видно на сторінці «Якість моделі» і в статистиці кожної області («Минулі прогнози і що сталося»).
-      Модель щодоби перенавчається на свіжих даних (окремим завданням, поза 10-хвилинним циклом), тож нові тривоги потрапляють у навчання.</p>
-
-    <h3>Мова</h3>
-    <p>Типово сторінка англійською; перемикач EN / UK у заголовку змінює мову і запамʼятовується в цьому браузері.
-      Мову можна задати й посиланням: <code>?lang=uk</code> або <code>?lang=en</code>.</p>
+    <details class="more"><summary>Модель докладно</summary>
+      <p>Для кожного питання і горизонту окремий градієнтний бустинг (LightGBM), навчений на останніх місяцях історії.
+        Входи: чи триває тривога зараз і скільки, скільки минуло від останньої, тривоги за 6 год / добу / тиждень, кожна з
+        останніх 24 годин, частка тривог у ту саму годину за 7 і 28 днів, година й день за Києвом, а також стан усіх інших
+        областей зараз і годину тому. Модель з Telegram додає сигнали вище і працює лише там, де виграла в моделі історії на
+        місяці валідації і архів свіжий; інакше працює модель історії.</p>
+      <p>Автоматичний тест перевіряє, що ознаки на повних даних збігаються з ознаками на даних, обрізаних у момент прогнозу.
+        Моделі щодоби перенавчаються на свіжих даних окремим завданням.</p>
+    </details>
+    <details class="more"><summary>Як ми перевіряємо якість</summary>
+      <p>Перед кожним навчанням останній тиждень відкладається і прогнозується погодинно, як наживо, поруч із двома орієнтирами:
+        <b>кліматологія</b> (частка з останніх 28 днів з тривогою в цю годину) і <b>персистентність</b> («що зараз, те й буде»).
+        Метрики: Brier score (менше краще), Brier skill score відносно кліматології (більше нуля краще) і ROC AUC.
+        Кожен живий прогноз також зберігається і звіряється з тим, що сталося, коли його година минає. Результати: <a href="#history">«Історія»</a>.</p>
+    </details>
+    <details class="more"><summary>Райони</summary>
+      <p>Оберіть область, щоб побачити її райони: червоним, де тривога на весь район, смугами, де лише в частині громад.
+        Прогноз району дає <b>модель району</b>, <b>область × частка району</b> (ймовірність для області, помножена на частку
+        тривог області за 28 днів, що зачепили район) або <b>прогноз області</b>, коли районних даних немає.
+        Панель району показує, як кожен спосіб спрацював на останніх чотирьох тижнях.</p>
+    </details>
+    <details class="more"><summary>Інші числа на сторінці</summary>
+      <p><b>Графіки історії</b> (72 години, календар, дні тижня, типова доба) показують, що сталося: яку частину години чи доби
+        була тривога, або частку днів з тривогою. <b>Тип загрози</b> це окрема модель: якщо тривога почнеться, якою вона
+        найімовірніше буде; її частки дають разом 100% і не є ймовірністю тривоги. Відсотки на сторінці <b>«Якість моделі»</b>
+        це оцінки: наскільки помилка менша, ніж у простого орієнтира.</p>
+    </details>
+    <details class="more"><summary>Дані, ліцензії, мова</summary>
+      <ul>
+        <li>Історія: волонтерський датасет тривог по областях
+          (<a href="https://github.com/Vadimkin/ukrainian-air-raid-sirens-dataset" rel="noopener">Vadimkin/ukrainian-air-raid-sirens-dataset</a>),
+          оновлюється приблизно раз на добу. Поточний стан: <a href="https://alerts.in.ua" rel="noopener">alerts.in.ua</a>;
+          тривога в будь-якому районі чи громаді позначає всю область, як і в історії.</li>
+        <li>Райони: «офіційний» районний файл того самого репозиторію (до 7 вересня 2026) і alerts.in.ua. Межі:
+          OCHA/HDX COD-AB (ДНВП «Картографія», CC BY 3.0 IGO).</li>
+        <li>Telegram: публічні канали через веб-перегляд t.me; новини: RSS-стрічки.</li>
+        <li>Мова: EN / UK у заголовку, запамʼятовується в цьому браузері; <code>?lang=uk</code> або <code>?lang=en</code> у посиланні.</li>
+      </ul>
+    </details>
 
     <h3>API</h3>
     <p id="api-note-uk">Усі дані сторінки доступні як JSON: <a href="/docs">/docs</a> (інтерактивна документація),
-      <code>/api/state</code>, <code>/api/forecast</code>, <code>/api/regions/{id}</code>, <code>/api/raions</code>, <code>/api/metrics</code>.</p>
+      <code>/api/state</code>, <code>/api/forecast</code>, <code>/api/regions/{id}</code>, <code>/api/raions</code>, <code>/api/metrics</code>, <code>/api/method</code>.</p>
     <p class="muted small">Код: <a href="https://github.com/IvanSnezhok/air-raid-forecast-ua" rel="noopener">github.com/IvanSnezhok/air-raid-forecast-ua</a></p>
     </div>
   </section>

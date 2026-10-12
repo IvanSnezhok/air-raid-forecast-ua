@@ -8,6 +8,8 @@
 # days (plus tomorrow, for a run that crosses midnight UTC); OUTPUT_DAYS=M (default
 # N) limits the forecasts / verification / calibration partitions to M days. The store grows by
 # every run and is never rewritten, so a full checkout would get slower every day.
+# `explanations` (why each forecast, airraid.explain) is written and read by the same
+# run, so it is never checked out; `git add --sparse` commits the new files anyway.
 # Without STORE_DAYS the full tree is checked out.
 set -euo pipefail
 STORE="${STORE:-live-data}"
