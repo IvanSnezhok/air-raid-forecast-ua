@@ -6,6 +6,11 @@
 newest posts are scraped from https://t.me/s/kpszsu on top of it, so features
 such as "drones heading to the oblast in the last hour" are current.
 
+`--store DIR` (a checkout of the `text-data` branch) is the better source: the
+fresh posts are written into that point-in-time archive with the time we first
+saw them (nothing is thrown away), and the posts are read back from it with the
+text as first seen. Commit DIR afterwards to keep them.
+
 Writes threat-type/reports/type_forecast_now.csv: per oblast and horizon,
 P(type | an alert starts) for drone, massed_drone, kab, missile, ballistic,
 P(red) and the expected level. When reports/forecast_now.csv from the main
@@ -28,6 +33,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT / "src"))
 from airraid.data import download, load_alerts  # noqa: E402
 from features import build  # noqa: E402
+from airraid.text import archive, telegram  # noqa: E402
 from fetch_sources import get, parse_page  # noqa: E402
 from labels import TYPES, label_onsets, load_posts, onsets  # noqa: E402
 from run_type import gbm_fit, rows_for  # noqa: E402
@@ -66,23 +72,35 @@ def fresh_posts(known_max_id: int, channel: str = "kpszsu", max_pages: int = 150
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--posts", required=True)
+    ap.add_argument("--posts", help="tg_kpszsu.parquet from the threat-labels-data branch")
+    ap.add_argument("--store", help="text-data archive: fresh posts are stored there and read back")
     ap.add_argument("--no-fetch", action="store_true", help="do not scrape new posts")
     a = ap.parse_args()
+    if not (a.posts or a.store):
+        ap.error("give --store (preferred) or --posts")
 
-    stored = pd.read_parquet(a.posts)
-    if not a.no_fetch:
-        try:
-            new = fresh_posts(int(stored["id"].max()))
-            stored = pd.concat([stored, new], ignore_index=True).drop_duplicates("id", keep="last")
-            print(f"+{len(new)} fresh posts, newest {new['date'].max() if len(new) else '-'}")
-        except Exception as e:
-            print(f"WARNING: could not fetch fresh posts ({e!r}); using stored history only")
-    tmp = HERE / "reports" / "_posts_now.parquet"
-    tmp.parent.mkdir(parents=True, exist_ok=True)
-    stored.to_parquet(tmp, index=False)
-    posts = load_posts(tmp)
-    tmp.unlink()
+    if a.store:
+        if not a.no_fetch:
+            try:
+                telegram.update(Path(a.store), "kpszsu", max_pages=150)
+            except Exception as e:
+                print(f"WARNING: could not fetch fresh posts ({e!r}); using stored history only")
+        rec = archive.read_records(Path(a.store), "telegram", "kpszsu")
+        # same columns as tg_kpszsu.parquet, with the text as first seen
+        stored = pd.DataFrame({"channel": "kpszsu", "id": rec["id"], "date": rec["date"],
+                               "edited": rec["edited_first"], "text": rec["text_first"]})
+    else:
+        stored = pd.read_parquet(a.posts)
+        if not a.no_fetch:
+            try:
+                new = fresh_posts(int(stored["id"].max()))
+                # keep the stored text when a post comes back edited: it is what was public first
+                stored = pd.concat([stored, new], ignore_index=True).drop_duplicates("id", keep="first")
+                print(f"+{len(new)} fresh posts, newest {new['date'].max() if len(new) else '-'} "
+                      "(not kept: pass --store to archive them)")
+            except Exception as e:
+                print(f"WARNING: could not fetch fresh posts ({e!r}); using stored history only")
+    posts = load_posts(stored)
 
     try:
         download()

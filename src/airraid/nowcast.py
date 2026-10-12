@@ -38,11 +38,13 @@ def feature_grid(alerts: pd.DataFrame, origin: pd.Timestamp, records: pd.DataFra
     return build_grid(hist[hist["start"] < origin], data_end=origin), gap
 
 
-def predict(models: dict, grid: AlertGrid) -> pd.DataFrame:
+def predict(models: dict, grid: AlertGrid, text=None, text_rows: pd.DataFrame | None = None) -> pd.DataFrame:
     """Forecast at the grid's end (the origin) for every region, target and horizon.
 
     Long frame: origin, region, target, horizon, p, clim (28-day climatology of
-    the same window, the reference forecast), active_now.
+    the same window, the reference forecast), active_now, model (which model
+    served: "lightgbm", or "lightgbm_text" when `text` (airraid.text.serving.
+    TextServing) can serve with the text features `text_rows` at the origin).
     """
     H, S = hourly_fraction(grid), hourly_starts(grid)
     k_now = grid.n_minutes // 60
@@ -56,10 +58,14 @@ def predict(models: dict, grid: AlertGrid) -> pd.DataFrame:
             m = models[(t, h)]
             if sorted(m.model.feature_name()) != sorted(feature_columns(x) + ["region"]):
                 raise RuntimeError("feature set changed since the models were trained; retrain needed")
+            if text is not None:
+                p, served = text.predict(x, t, h, text_rows, fallback=m)
+            else:
+                p, served = m.predict(x), "lightgbm"
             rows.append(pd.DataFrame({
                 "origin": origin, "region": x["region"].to_numpy(), "target": t, "horizon": h,
-                "p": np.round(m.predict(x), 4), "clim": x[CLIM_COL[t]].to_numpy().astype(float).round(4),
-                "active_now": x["active_now"].to_numpy().astype(int),
+                "p": np.round(p, 4), "clim": x[CLIM_COL[t]].to_numpy().astype(float).round(4),
+                "active_now": x["active_now"].to_numpy().astype(int), "model": served,
             }))
     return pd.concat(rows, ignore_index=True)
 

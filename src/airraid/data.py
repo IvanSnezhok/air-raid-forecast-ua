@@ -107,7 +107,8 @@ def grid_start(alerts: pd.DataFrame, data_end: pd.Timestamp) -> pd.Timestamp:
     return alerts["start"].min().floor("D") - pd.Timedelta(minutes=(60 - phase) % 60)
 
 
-def build_grid(alerts: pd.DataFrame, data_end: pd.Timestamp | None = None) -> AlertGrid:
+def build_grid(alerts: pd.DataFrame, data_end: pd.Timestamp | None = None, regions: list[str] | None = None,
+               t0: pd.Timestamp | None = None) -> AlertGrid:
     """Rasterise alerts onto a minute grid.
 
     `data_end` is the moment up to which we treat the data as complete. Anything
@@ -116,19 +117,28 @@ def build_grid(alerts: pd.DataFrame, data_end: pd.Timestamp | None = None) -> Al
     test uses this. `data_end` need not be on the hour: the grid's hour blocks
     are aligned to end at it (see `grid_start`), which is how forecasts are made
     from any minute (sub-hour origins).
+    `regions` / `t0` fix the rows and the start of the grid (default: the
+    regions in the data, `grid_start`); the raion layer uses them to keep raions
+    without recent alerts. An explicit `t0` is aligned the same way.
     """
     if data_end is None:
         data_end = alerts["start"].max().floor("h")
     data_end = data_end.floor("min")
     alerts = alerts[alerts["start"] < data_end]
-    t0 = grid_start(alerts, data_end)
+    if t0 is None:
+        t0 = grid_start(alerts, data_end)
+    else:
+        # an explicit start (the raion layer) is moved back to the origin's minute of the
+        # hour too, so the hour blocks end at data_end (no change for top-of-hour data_end)
+        t0 = t0 - pd.Timedelta(minutes=int((t0 - data_end) / pd.Timedelta(minutes=1)) % 60)
+        alerts = alerts[alerts["end"] > t0]
     n_minutes = int((data_end - t0) / pd.Timedelta(minutes=1))
-    regions = sorted(alerts["region"].unique())
+    regions = sorted(alerts["region"].unique()) if regions is None else sorted(regions)
     active = np.zeros((len(regions), n_minutes), dtype=bool)
     starts, ends = [], []
     for i, reg in enumerate(regions):
         sub = alerts[alerts["region"] == reg]
-        s = ((sub["start"] - t0) / pd.Timedelta(minutes=1)).to_numpy().astype(np.int64)
+        s = np.maximum(((sub["start"] - t0) / pd.Timedelta(minutes=1)).to_numpy(), 0).astype(np.int64)
         e = np.ceil((sub["end"] - t0) / pd.Timedelta(minutes=1)).to_numpy().astype(np.int64)
         e = np.minimum(e, n_minutes)
         s, e = _merge(s, e)

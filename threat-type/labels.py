@@ -36,8 +36,8 @@ KYIV = "Europe/Kyiv"
 TYPES = ["drone", "massed_drone", "kab", "missile", "ballistic"]
 
 
-def load_posts(path: Path) -> pd.DataFrame:
-    df = pd.read_parquet(path)
+def load_posts(path: Path | pd.DataFrame) -> pd.DataFrame:
+    df = pd.read_parquet(path) if not isinstance(path, pd.DataFrame) else path.copy()
     df["date"] = pd.to_datetime(df["date"], utc=True)
     info = df["text"].fillna("").map(classify)
     for k in ("threats", "regions", "national", "summary", "all_clear", "drones_reported"):

@@ -21,6 +21,13 @@ Two sources of live data:
     numbers) and the verification. The static GitHub Pages build uses this.
 Live records only ever extend the history after the dataset ends and never
 enter training.
+
+Optional layers: the history + Telegram model (`Settings.text_root`,
+airraid.text.serving, boosters in <model_dir>/text) replaces the history-only
+model per target and horizon when the text archive covers the origin; the raion
+layer (raion_engine.RaionForecaster) adds raion state and forecasts. With
+AIRRAID_TEXT_TRAIN=0 / AIRRAID_RAION_TRAIN=0 (the pipeline's site build) their
+models are only loaded, never trained here.
 """
 from __future__ import annotations
 
@@ -36,7 +43,7 @@ from airraid import nowcast, training
 from airraid import store as pit
 from airraid.data import build_grid, download, load_alerts
 from airraid.evaluate import reliability, scores
-from airraid.features import HORIZONS, KYIV, hourly_fraction
+from airraid.features import HORIZONS, KYIV, hourly_fraction, hourly_starts
 from airraid.live_alerts import LIVE_EXPIRY_HOURS, after_dataset, from_frame, store_records
 from airraid.live_alerts import parse_active as parse_records
 from airraid.training import TARGETS, Plan  # noqa: F401  (Plan re-exported for old imports)
@@ -45,6 +52,7 @@ from airraid.verification import outcomes, site_summary
 from .config import Settings
 from .journal import ForecastJournal, LiveRecorder
 from .live import LiveState, RegionState, fetch_active, state_from_alerts, state_from_dataset
+from .raion_engine import RaionForecaster, raion_state
 from .regions import slug, uk_name
 from .threats import ThreatForecast
 
@@ -87,6 +95,15 @@ class ForecastEngine:
         self.recorder = LiveRecorder(settings.state_dir / "live_alerts.csv")
         self.journal = ForecastJournal(settings.state_dir / "forecast_journal.parquet")
         self.threats = ThreatForecast(settings.type_forecast)
+        # history + Telegram model, served only when the text archive covers the origin
+        self.text = None
+        if settings.text_root:
+            from airraid.text.serving import TextServing
+            self.text = TextServing(settings.text_root, settings.model_dir / "text", settings.reports_dir,
+                                    threads=settings.lgb_threads)
+        self.raions = RaionForecaster(settings)
+        # live raion state: (states by raion id, unmatched location titles, as_of); None without live data
+        self._raion_live: tuple[dict, list, pd.Timestamp] | None = None
 
     # ------------------------------------------------------------------ data
     def load_data(self, refresh: bool | None = None) -> None:
@@ -107,6 +124,7 @@ class ForecastEngine:
             self.data_loaded_at = time.time()
             self._forecast = None
         log.info("history: %d alerts, last start %s", len(alerts), self.hist_end)
+        self.raions.load(refresh)
 
     # ---------------------------------------------------------------- models
     def _plans(self) -> dict[tuple[str, int], Plan]:
@@ -125,6 +143,12 @@ class ForecastEngine:
             alerts, plan, self.s.holdout_days, self.s.lgb_threads, selection_source=source,
             progress=lambda n, total: self._set("training", f"Навчання моделей ({n}/{total})"))
         training.save(self.s.model_dir, models, meta, holdout)
+        if self.text is not None:
+            self._set("training", "Навчання моделі з Telegram-сигналами")
+            data_end = pd.Timestamp(meta["data_end"])
+            grid = build_grid(alerts, data_end=data_end)
+            self.text.ensure_models(grid, hourly_fraction(grid), hourly_starts(grid), data_end, self.s.retrain_h)
+        self._prepare_raions(alerts)
         with self.lock:
             self.models, self.meta, self.holdout = models, meta, holdout
             self._forecast = None
@@ -145,12 +169,35 @@ class ForecastEngine:
             age = self.hist_end - pd.Timestamp(meta["data_end"])
             if age > pd.Timedelta(hours=self.s.retrain_h):
                 return False
+        if self.text is not None:
+            max_age = self.s.retrain_h if self.text.allow_train else None  # saved by a separate job: any age
+            if self.text.load(pd.Timestamp(meta["data_end"]), max_age):
+                self.text.status = "loaded"
+            elif self.text.allow_train:
+                return False  # retrain, the text model with it
+            else:  # AIRRAID_TEXT_TRAIN=0 and nothing saved: the history-only model serves
+                self.text.models = {}
+                self.text.status = "no saved text model and training is off (AIRRAID_TEXT_TRAIN=0)"
+        self._prepare_raions(self.alerts)
         with self.lock:
             self.models, self.meta, self.holdout = models, meta, holdout
             self._forecast = None
         self._set("ready", "Готово")
         log.info("loaded saved models trained on data to %s", meta["data_end"])
         return True
+
+    def _prepare_raions(self, alerts: pd.DataFrame) -> None:
+        # the moment forecasts will be made for: now with live data, else the end of the dataset
+        live = self.s.alerts_token or self.s.store_dir is not None
+        now = pd.Timestamp.now(tz="UTC") if live else self.hist_end.floor("h")
+        try:
+            if self.s.raion_train:
+                self.raions.prepare(alerts, now, self.s.lgb_threads)  # dataset only: training never sees live data
+            elif not (self.s.raion_models and self.raions.load_saved(self.s.raion_models_path)):
+                # AIRRAID_RAION_TRAIN=0 and nothing saved: shares only, oblast x share (labelled)
+                self.raions.prepare(alerts, now, self.s.lgb_threads, train=False)
+        except Exception:  # noqa: BLE001 - the oblast forecast must not depend on the raion layer
+            log.exception("raion layer preparation failed")
 
     # ------------------------------------------------------------------ live
     def live_state(self, max_age: float | None = None) -> LiveState:
@@ -163,12 +210,14 @@ class ForecastEngine:
             alerts, regions = self.alerts, self.regions
         if alerts is None:
             raise NotReady("no data")
-        state = None
+        state, raion_live = None, None
         if self.s.alerts_token:
             try:
                 records = parse_records(fetch_active(self.s.alerts_token))
                 now = pd.Timestamp.now(tz="UTC")
                 state = state_from_alerts(records, regions, now, cleared=self.recorder.cleared(records, now))
+                states, unmatched = raion_state(records)  # display state per raion (all levels)
+                raion_live = (states, unmatched, state.as_of)
             except Exception as e:
                 log.warning("alerts.in.ua failed: %s", e)
                 state = state_from_dataset(alerts, regions, error=f"alerts.in.ua недоступний: {type(e).__name__}")
@@ -177,6 +226,7 @@ class ForecastEngine:
         self.recorder.observe(state)
         with self.lock:
             self._live, self._live_at = state, time.time()
+            self._raion_live = raion_live
         return state
 
     def _store_snapshot(self) -> dict:
@@ -203,6 +253,8 @@ class ForecastEngine:
             records, covered = store_records(root, origin, hist_end)
             live = None
         grid, gap = nowcast.feature_grid(alerts, origin, records)
+        hist = pd.concat([alerts, gap], ignore_index=True) if len(gap) else alerts
+        raion_live = None
         if live is None:
             # the map's "now" is the forecast's active_now: the same grid at the origin
             act = pit.load(root, "alerts_active", as_of=seen, since=seen.floor("D"))
@@ -220,8 +272,10 @@ class ForecastEngine:
                     if a.level != "oblast" and a.title:
                         states[a.oblast].locations.append(a.title)
             live = LiveState("alerts.in.ua", seen, states, alerts=polled)
-        snap = {"key": key, "origin": origin, "grid": grid, "gap": gap, "live": live,
-                "known": max(hist_end, covered) if covered is not None else hist_end}
+            rs, unmatched = raion_state(polled)  # raion state of the same poll
+            raion_live = (rs, unmatched, seen)
+        snap = {"key": key, "origin": origin, "grid": grid, "gap": gap, "live": live, "hist": hist,
+                "raion_live": raion_live, "known": max(hist_end, covered) if covered is not None else hist_end}
         with self.lock:
             self._snap = snap
         return snap
@@ -242,7 +296,9 @@ class ForecastEngine:
             origin = hist_end.floor("h")
         ongoing = live.ongoing_alerts()
         ongoing = ongoing[ongoing["start"] < origin] if live.source == "alerts.in.ua" else ongoing.iloc[0:0]
-        key = (origin, hist_end, tuple(map(tuple, ongoing.astype(str).to_numpy())), self.recorder.version())
+        rl = self._raion_live
+        raion_key = None if rl is None else tuple(sorted((k, str(v.since), v.level) for k, v in rl[0].items() if v.active))
+        key = (origin, hist_end, tuple(map(tuple, ongoing.astype(str).to_numpy())), self.recorder.version(), raion_key)
         with self.lock:
             if self._forecast and self._forecast[0] == key:
                 return self._forecast[1]
@@ -251,11 +307,12 @@ class ForecastEngine:
             extra = ongoing.assign(end=origin + pd.Timedelta(hours=1), naive=False)  # end is never used as a feature
             hist = pd.concat([hist, after_dataset(extra, dataset)], ignore_index=True)
         grid, _ = nowcast.feature_grid(hist, origin)
-        probs = nowcast.predict(self.models, grid)
+        text_rows, text_status = (None, "off") if self.text is None else self.text.rows_now(grid, grid.n_minutes // 60)
+        probs = nowcast.predict(self.models, grid, self.text, text_rows).assign(text_status=text_status)
         known = self.recorder.known_until(hist_end)
         cs = self.recorder.covered_since
         gap_h = ((cs - hist_end) if cs is not None and cs > hist_end else (origin - known)) / pd.Timedelta(hours=1)
-        result = self._compute(grid, origin, hist_end, probs, live, gap_h, self.meta)
+        result = self._compute(grid, origin, hist_end, probs, live, gap_h, self.meta, hist, rl)
         with self.lock:
             self._forecast = (key, result)
         J = self.journal.frame()
@@ -281,10 +338,12 @@ class ForecastEngine:
             with self.lock:
                 if not self.models:
                     raise NotReady(self.message)
-            probs = nowcast.predict(self.models, grid)
+            text_rows, text_status = (None, "off") if self.text is None else self.text.rows_now(grid, grid.n_minutes // 60)
+            probs = nowcast.predict(self.models, grid, self.text, text_rows).assign(text_status=text_status)
             log.warning("no stored forecast for origin %s: computed it with the loaded models", origin)
         gap_h = (origin - snap["known"]) / pd.Timedelta(hours=1)
-        result = self._compute(grid, origin, hist_end, probs, snap["live"], gap_h, meta)
+        result = self._compute(grid, origin, hist_end, probs, snap["live"], gap_h, meta, snap["hist"],
+                               snap["raion_live"])
         result["issued_at"] = _iso(pd.to_datetime(probs["issued_at"], utc=True).max()) if "issued_at" in probs else None
         with self.lock:
             self._forecast = (snap["key"], result)
@@ -298,7 +357,9 @@ class ForecastEngine:
         return pd.concat([alerts, rec[rec["region"].isin(self.regions)]], ignore_index=True)
 
     def _compute(self, grid, origin, hist_end, probs_long: pd.DataFrame, live: LiveState, gap_h: float,
-                 meta: dict) -> dict:
+                 meta: dict, hist: pd.DataFrame, raion_live) -> dict:
+        """Response of /api/forecast from the forecast rows (`probs_long`: region, target, horizon, p,
+        and model / text_status when known), the feature grid and the history behind it."""
         probs = {r: {t: {} for t in TARGETS} for r in grid.regions}
         for r, t, h, p in zip(probs_long["region"], probs_long["target"], probs_long["horizon"], probs_long["p"]):
             if r in probs:
@@ -352,7 +413,10 @@ class ForecastEngine:
             "horizons": list(HORIZONS),
             "windows": windows,
             "warnings": warnings,
-            "model": {k: meta.get(k) for k in ("trained_at", "data_end", "selection_source")},
+            "model": {**{k: meta.get(k) for k in ("trained_at", "data_end", "selection_source")},
+                      "served": sorted(set(probs_long["model"])) if "model" in probs_long else ["lightgbm"],
+                      "text_status": str(probs_long["text_status"].iloc[0])
+                      if "text_status" in probs_long and len(probs_long) else "off"},
             "regions": [
                 {
                     "id": slug(r), "name": r, "name_uk": uk_name(r),
@@ -365,7 +429,16 @@ class ForecastEngine:
                 }
                 for i, r in enumerate(grid.regions)
             ],
+            "raions": self._raion_forecast(origin, probs, hist, raion_live),
         }
+
+    def _raion_forecast(self, origin, probs, alerts, rl) -> dict | None:
+        try:
+            return self.raions.forecast(origin, probs, rl[0] if rl else None, rl[2] if rl else None, alerts,
+                                        rl[1] if rl else None)
+        except Exception:  # noqa: BLE001 - keep serving oblasts
+            log.exception("raion forecast failed")
+            return None
 
     # ---------------------------------------------------------- verification
     def verification(self, region: str | None = None, recent_hours: int = 24) -> dict:

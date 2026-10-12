@@ -5,8 +5,8 @@
         python scripts/build_static_site.py site --status status.json  # the 10-minute pipeline
 
 Runs the same ForecastEngine as the FastAPI service once, saves the answers of
-/api/state, /api/forecast, /api/regions[/{id}], /api/metrics, /api/verification
-and /api/threats (only if the threat-type forecast exists) as api/*.json and
+/api/state, /api/forecast, /api/regions[/{id}], /api/raions[/{id}], /api/metrics,
+/api/verification and /api/threats (only if the threat-type forecast exists) as api/*.json and
 copies the UI into site/. The UI detects the <meta name="airraid-static"> tag
 and reads api/<name>.json instead of calling /api/<name>. Without threat-type
 data the threat layer is hidden by the UI itself (forecast.threats is null).
@@ -39,8 +39,9 @@ from airraid_app.engine import ForecastEngine  # noqa: E402
 STATIC_API_NOTE = (
     '<p>Усі дані сторінки доступні як JSON (оновлюються разом зі збіркою сайту): '
     '<a href="api/state.json">state</a>, <a href="api/forecast.json">forecast</a>, '
-    '<a href="api/regions.json">regions</a>, <a href="api/metrics.json">metrics</a>, '
-    '<a href="api/verification.json">verification</a>, <a href="api/status.json">status</a>.</p>'
+    '<a href="api/regions.json">regions</a>, <a href="api/raions.json">raions</a>, '
+    '<a href="api/metrics.json">metrics</a>, <a href="api/verification.json">verification</a>, '
+    '<a href="api/status.json">status</a>.</p>'
 )
 
 
@@ -78,6 +79,9 @@ def build(out: Path, settings: Settings, status: Path | None = None) -> None:
     save("forecast")
     for reg in save("regions"):
         save(f"regions/{reg['id']}")
+    raions = save("raions", required=False)  # raion layer; the UI hides it when missing
+    for r in (raions or {}).get("raions", []):
+        save(f"raions/{r['id']}")
     save("metrics", required=False)
     save("verification", required=False)
     save("threats", required=False)  # 404 without a threat-type forecast

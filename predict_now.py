@@ -28,6 +28,12 @@ never change anything before the end of the dataset.
 
 Every forecast is appended to reports/forecast_log.csv and, with --store, to the
 point-in-time store (`forecasts`) so verify.py can score it.
+
+With --text-root (a text-data checkout) the history + Telegram model
+(airraid.text.serving, boosters in <models>/text) serves where it beat the
+history-only model and the archive covers the origin; each row says which model
+served (`model`) and why (`text_status`). AIRRAID_TEXT_TRAIN=0 (the pipeline)
+only loads the text boosters the train job saved.
 """
 from __future__ import annotations
 
@@ -109,6 +115,29 @@ def get_models(alerts: pd.DataFrame, model_dir: Path | None, threads: int, train
     return models, meta
 
 
+def text_model(text_root: Path, model_dir: Path | None, alerts: pd.DataFrame, hist_end: pd.Timestamp, grid,
+               threads: int, as_of: bool, fetch: bool):
+    """(TextServing, text rows at the origin, status): the history + Telegram model and its
+    features at the grid's end, or (None, None, reason) and the history-only model serves.
+
+    Trained like the history model on the dataset grid when allowed and needed; with
+    AIRRAID_TEXT_TRAIN=0 only the saved boosters are loaded (the grid is not even built).
+    """
+    from airraid.data import build_grid
+    from airraid.features import hourly_fraction, hourly_starts
+    from airraid.text.serving import TextServing
+
+    text = TextServing(text_root, (model_dir or MODELS_DIR) / ("text_replay" if as_of else "text"), ROOT / "reports",
+                       threads=threads, fetch=fetch and not as_of)
+    tgrid = build_grid(alerts, data_end=hist_end.floor("h")) if text.allow_train else None
+    H, S = (hourly_fraction(tgrid), hourly_starts(tgrid)) if tgrid is not None else (None, None)
+    if not text.ensure_models(tgrid, H, S, hist_end, 0 if as_of else 24):
+        return None, None, f"text model unavailable: {text.status}"
+    rows, status = text.rows_now(grid, grid.n_minutes // 60)
+    print(f"text signals: {status}")
+    return text, rows, status
+
+
 def append_log(out_long: pd.DataFrame):
     """Append this run's forecasts to the forecast log (one row per region/target/horizon)."""
     LOG_PATH.parent.mkdir(exist_ok=True)
@@ -123,7 +152,7 @@ def append_log(out_long: pd.DataFrame):
 def forecast(alerts: pd.DataFrame, now: pd.Timestamp, store_root: Path | None = None, token: str | None = None,
              model_dir: Path | None = MODELS_DIR, threads: int = 4, as_of: bool = False, train: bool = True,
              reports_dir: Path = ROOT / "reports", complete_until: pd.Timestamp | None = None,
-             ) -> tuple[pd.DataFrame, dict]:
+             text_root: Path | None = None, text_fetch: bool = True) -> tuple[pd.DataFrame, dict]:
     """(forecast rows, meta) at the origin defined by the newest live observation before `now`.
 
     `alerts` is the volunteer dataset (for a replay: truncated at `now`, and
@@ -177,10 +206,15 @@ def forecast(alerts: pd.DataFrame, now: pd.Timestamp, store_root: Path | None = 
         print(f"gap after the dataset: {len(gap)} oblast-level alerts rebuilt from live records")
     print(f"models trained on data up to {trained_until} ({meta.get('trained_at')})")
 
-    log = nowcast.predict(models, grid)
+    text, text_rows, text_status = None, None, "off (no --text-root)"
+    if text_root is not None:
+        text, text_rows, text_status = text_model(text_root, None if as_of else model_dir, alerts, hist_end, grid,
+                                                  threads, as_of, text_fetch)
+    log = nowcast.predict(models, grid, text, text_rows)
+    served = sorted(set(log["model"]))
     issued_at = pd.Timestamp.now(tz="UTC").floor("s")
     log = log.assign(issued_at=issued_at, live=bool(token) or len(gap) > 0 or seen is not None,
-                     trained_until=trained_until, hist_end=hist_end, git_sha=git_sha())
+                     trained_until=trained_until, hist_end=hist_end, git_sha=git_sha(), text_status=text_status)
     if store_root is not None and not as_of:
         store.append(store_root, "forecasts", log)
     local = origin.tz_convert("Europe/Kyiv")
@@ -195,6 +229,8 @@ def forecast(alerts: pd.DataFrame, now: pd.Timestamp, store_root: Path | None = 
         "models_trained_until_utc": f"{trained_until:%Y-%m-%d %H:%M}",
         "models_trained_at_utc": meta.get("trained_at"),
         "live_api": bool(token),
+        "model_served": ",".join(served),
+        "text_status": text_status,
     }
 
 
@@ -211,6 +247,11 @@ def main():
     ap.add_argument("--no-download", action="store_true", default=os.environ.get("AIRRAID_DOWNLOAD") == "0",
                     help="use the local dataset copy (the pipeline downloads it once per run)")
     ap.add_argument("--threads", type=int, default=int(os.environ.get("AIRRAID_LGB_THREADS", 4)))
+    ap.add_argument("--text-root", type=Path, default=os.environ.get("AIRRAID_TEXT_ROOT") or None,
+                    help="text archive (text-data branch checkout): serve the history + Telegram model "
+                         "when the archive covers the origin, else the history-only model")
+    ap.add_argument("--text-no-fetch", action="store_true",
+                    help="do not fetch new posts first (the pipeline ran `airraid.text.collect update` just before)")
     args = ap.parse_args()
 
     if not args.no_download:
@@ -226,10 +267,12 @@ def main():
         complete = min(now, alerts["start"].max())
         alerts, token = alerts[alerts["start"] < now], None
     log, meta = forecast(alerts, now, args.store, token, args.models, args.threads, as_of=bool(args.as_of),
-                         train=not args.no_train, complete_until=complete)
+                         train=not args.no_train, complete_until=complete, text_root=args.text_root,
+                         text_fetch=not args.text_no_fetch)
     append_log(log)
     out = nowcast.wide(log)
-    print(f"\nForecast for the next hours from {meta['origin_kyiv']} Kyiv time")
+    print(f"\nForecast for the next hours from {meta['origin_kyiv']} Kyiv time by {meta['model_served']} "
+          f"(text: {meta['text_status']})")
     print("active_Nh: P(alert active during hour N); onset_Nh: P(new alert starts within N hours)\n")
     print(out.sort_values("active_1h", ascending=False).to_string(index=False))
     (ROOT / "reports").mkdir(exist_ok=True)
