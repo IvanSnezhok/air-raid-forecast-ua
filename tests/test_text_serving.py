@@ -100,3 +100,32 @@ def _xy(grid, H, S, k):
     x = add_horizon_features(build_features(grid, K, H), grid, H, 1, S)
     y = np.resize([0.0, 1.0], len(x))
     return x, y
+
+
+def test_text_training_off_serves_saved_models_or_the_history_model(setup, monkeypatch, tmp_path):
+    """AIRRAID_TEXT_TRAIN=0 (the 10-minute pipeline): never train; serve boosters a separate job
+    saved, whatever their age, else say why and let the history-only model serve."""
+    d, grid, H, S, end = setup
+    monkeypatch.setattr("airraid.text.telegram.FEATURE_CHANNELS", ["kpszsu"])
+    monkeypatch.setattr("airraid.text.features.FEATURE_CHANNELS", ["kpszsu"])
+    hist_end = end - pd.Timedelta(hours=30)
+    saved = tmp_path / "text"
+    TextServing(d, saved, reports_dir=d, fetch=False).train(grid, H, S, hist_end - pd.Timedelta(days=5))
+
+    def no_training(*a, **k):
+        raise AssertionError("text models must not be trained with AIRRAID_TEXT_TRAIN=0")
+    monkeypatch.setattr(TextServing, "train", no_training)
+    monkeypatch.setenv("AIRRAID_TEXT_TRAIN", "0")
+    off = TextServing(d, saved, reports_dir=d, fetch=False)
+    assert off.allow_train is False
+    assert off.ensure_models(grid, H, S, hist_end, retrain_hours=24)  # 5 days old: still served
+    assert off.status.startswith("loaded") and off.models
+
+    none = TextServing(d, tmp_path / "nothing", reports_dir=d, fetch=False)
+    assert not none.ensure_models(grid, H, S, hist_end) and "AIRRAID_TEXT_TRAIN=0" in none.status
+    rows, status = none.rows_now(grid, grid.minute(hist_end) // 60 - 2)
+    assert rows is None and "AIRRAID_TEXT_TRAIN=0" in status
+    k = grid.minute(hist_end) // 60 - 2
+    fallback = GBM(n_estimators=5).fit(*_xy(grid, H, S, k))
+    x = add_horizon_features(build_features(grid, np.array([k]), H), grid, H, 1, S)
+    assert none.predict(x, "onset", 1, rows, fallback)[1] == "lightgbm"

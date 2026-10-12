@@ -12,6 +12,11 @@ validation month for that target and horizon (reports/text_selection.json), (b) 
 boosters exist and were trained with the current feature set, and (c) the archive
 covers the origin (fresh fetch worked, no gap). Otherwise the history-only model
 serves, and `served` says which one did.
+
+`allow_train=False` (env AIRRAID_TEXT_TRAIN=0, the 10-minute pipeline): never train
+here; serve the boosters a separate job saved (`python -m airraid.text.serving train`),
+whatever their age (they never saw data after hist_end), else the history-only model.
+`status` says what happened.
 Training mirrors run.py's lightgbm_text: origins from text coverage on, labels
 fully observed before the history end, trees from reports/text_selection.json.
 """
@@ -19,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -39,8 +45,12 @@ FORMAT = 1
 
 class TextServing:
     def __init__(self, root: Path | str, model_dir: Path | str, reports_dir: Path | str | None = None,
-                 threads: int = 2, fetch: bool = True, min_fetch_s: float = 300):
+                 threads: int = 2, fetch: bool = True, min_fetch_s: float = 300, allow_train: bool | None = None):
         self.root, self.model_dir = Path(root), Path(model_dir)
+        if allow_train is None:
+            allow_train = os.environ.get("AIRRAID_TEXT_TRAIN", "1").strip().lower() not in ("0", "false", "no", "off")
+        self.allow_train = allow_train
+        self.status = "not loaded"
         self.reports_dir = Path(reports_dir) if reports_dir else Path(__file__).resolve().parents[3] / "reports"
         self.threads, self.fetch, self.min_fetch_s = threads, fetch, min_fetch_s
         self._fetched_at = -np.inf
@@ -70,13 +80,15 @@ class TextServing:
                     out.add((t, h))
         return out
 
-    def load(self, hist_end: pd.Timestamp, max_age_h: float) -> bool:
+    def load(self, hist_end: pd.Timestamp, max_age_h: float | None) -> bool:
+        """Saved boosters trained on data up to <= hist_end (and, with max_age_h, not older than that)."""
         try:
             meta = json.loads((self.model_dir / "meta.json").read_text())
         except (OSError, ValueError):
             return False
         trained = pd.Timestamp(meta["trained_until_utc"])
-        if meta.get("format") != FORMAT or not (trained <= hist_end <= trained + pd.Timedelta(hours=max_age_h)):
+        too_old = max_age_h is not None and hist_end > trained + pd.Timedelta(hours=max_age_h)
+        if meta.get("format") != FORMAT or trained > hist_end or too_old:
             return False
         models = {}
         for key, info in meta["models"].items():
@@ -116,21 +128,31 @@ class TextServing:
         self.models, self.meta = models, meta
 
     def ensure_models(self, grid, H, S, hist_end: pd.Timestamp, retrain_hours: float = 24) -> bool:
-        """Load fresh boosters or train new ones; False (and the history model serves) if that fails."""
-        if self.load(hist_end, retrain_hours):
+        """Load fresh boosters or train new ones; False (and the history model serves) if that fails.
+
+        Without allow_train only loads, accepting boosters of any age."""
+        if self.load(hist_end, retrain_hours if self.allow_train else None):
+            self.status = f"loaded (trained until {self.meta.get('trained_until_utc')})"
             return True
+        if not self.allow_train:
+            self.models = {}
+            self.status = f"no saved text model in {self.model_dir} and training is off (AIRRAID_TEXT_TRAIN=0)"
+            log.info(self.status)
+            return False
         try:
             self.train(grid, H, S, hist_end)
+            self.status = "trained"
             return True
         except Exception as e:  # never let the text model break the forecast
             log.warning("text model not available: %r", e)
             self.models = {}
+            self.status = f"training failed: {type(e).__name__}"
             return False
 
     # -------------------------------------------------------------- forecast
     def rows_now(self, grid, k_now: int):
         if not self.models:
-            return None, "no text model"
+            return None, f"no text model ({self.status})"
         fetch = self.fetch and time.monotonic() - self._fetched_at >= self.min_fetch_s  # be polite to t.me
         if fetch:
             self._fetched_at = time.monotonic()

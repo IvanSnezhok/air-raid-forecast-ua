@@ -156,7 +156,7 @@ def text_model(args, tgrid, grid, hist_end, k_now):
                        threads=args.threads, fetch=not (args.as_of or args.text_no_fetch))
     if not text.ensure_models(tgrid, hourly_fraction(tgrid), hourly_starts(tgrid), hist_end,
                               0 if args.as_of else args.retrain_hours):
-        return None, None, "text model unavailable"
+        return None, None, f"text model unavailable: {text.status}"
     rows, status = text.rows_now(grid, k_now)
     print(f"text signals: {status}")
     return text, rows, status

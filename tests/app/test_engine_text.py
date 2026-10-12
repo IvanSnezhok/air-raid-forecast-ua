@@ -57,3 +57,22 @@ def test_engine_falls_back_when_archive_is_stale(text_settings):
     assert e.status == "ready", e.message
     f = e.forecast()
     assert f["model"]["served"] == ["lightgbm"] and "does not cover" in f["model"]["text_status"]
+
+
+def test_engine_with_text_training_off_never_trains_the_text_model(text_settings, monkeypatch):
+    """AIRRAID_TEXT_TRAIN=0 (the pipeline's site build): saved oblast models load, and without a
+    saved text model the history-only model serves instead of training one."""
+    import shutil
+
+    from airraid.text.serving import TextServing
+
+    s = text_settings("2030-01-01T00:00:00Z")
+    ForecastEngine(s).bootstrap()  # oblast + text models saved
+    shutil.rmtree(s.model_dir / "text")
+    monkeypatch.setenv("AIRRAID_TEXT_TRAIN", "0")
+    monkeypatch.setattr(TextServing, "train", lambda *a, **k: (_ for _ in ()).throw(AssertionError("trained")))
+    e = ForecastEngine(s)
+    e.load_data()
+    assert e.load_models()
+    f = e.forecast()
+    assert f["model"]["served"] == ["lightgbm"] and "AIRRAID_TEXT_TRAIN=0" in f["model"]["text_status"]

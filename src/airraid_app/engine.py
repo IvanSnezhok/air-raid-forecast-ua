@@ -258,8 +258,15 @@ class ForecastEngine:
                 g.model = lgb.Booster(model_file=str(path))
                 g.regions = meta["regions"]
                 models[(t, h)] = g
-        if self.text is not None and not self.text.load(pd.Timestamp(meta["data_end"]), self.s.retrain_h):
-            return False  # retrain, the text model with it
+        if self.text is not None:
+            age = self.s.retrain_h if self.text.allow_train else None  # saved by a separate job: any age
+            if self.text.load(pd.Timestamp(meta["data_end"]), age):
+                self.text.status = "loaded"
+            elif self.text.allow_train:
+                return False  # retrain, the text model with it
+            else:  # AIRRAID_TEXT_TRAIN=0 and nothing saved: the history-only model serves
+                self.text.models = {}
+                self.text.status = "no saved text model and training is off (AIRRAID_TEXT_TRAIN=0)"
         holdout = pd.read_parquet(d / "holdout.parquet") if (d / "holdout.parquet").exists() else pd.DataFrame()
         self._prepare_raions(self.alerts)
         with self.lock:

@@ -642,7 +642,10 @@ labelled `models_source: "none"` in `/api/raions`).
   stale or has a gap at the origin, or the boosters do not match the features, the
   history-only model serves instead. Which one served is in the forecast log (`model`),
   in `reports/forecast_meta.json` (`model_served`, `text_status`) and in the API
-  (`model.served`, `model.text_status`).
+  (`model.served`, `model.text_status`). With `AIRRAID_TEXT_TRAIN=0` the text models are
+  never trained in the forecast run: the boosters a separate job saved
+  (`python -m airraid.text.serving train --root text-data --model-dir <models>/text`) are
+  served whatever their age, else the history-only model, and `text_status` says so.
 
 ## What went wrong along the way
 
