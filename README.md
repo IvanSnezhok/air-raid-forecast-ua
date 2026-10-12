@@ -20,6 +20,20 @@ The web UI ([GitHub Pages](https://ivansnezhok.github.io/air-raid-forecast-ua/),
 FastAPI app: [`docs/web-app.md`](docs/web-app.md)) is in **English by default** with a
 Ukrainian switch (EN / UK in the header, remembered per viewer, or `?lang=uk`).
 
+**What the percentages on the page mean.** Every forecast number is the probability of an
+**air raid alert of any type** (attack drones, missiles, ballistic missiles, KABs…: the alert
+records do not say which threat caused an alert) declared anywhere in the oblast or raion, for
+the two targets above. The probabilities are calibrated: "70%" means that of past forecasts
+around 70%, about 7 in 10 were followed by an alert
+([`reports/figures/reliability.png`](reports/figures/reliability.png), and the calibration chart
+on the "Model quality" page). It is not a share of the territory, of the hour, or the model's
+confidence. The risk words are ranges of it (low < 15%, moderate 15–39%, high 40–69%, very high
+≥ 70%). The history charts show a different quantity (how much of each hour or day was actually
+under alert), and the threat-type block is conditional: *if* an alert starts, which threat it is
+likely to be (shares add up to 100%; not the chance of an alert). Every forecast table has a
+short line saying this and a "?" with the full definition; details and screenshots in
+[`docs/web-app.md`](docs/web-app.md#що-означають-відсотки).
+
 ## Quick start
 
 ```bash
