@@ -1,6 +1,6 @@
 """The built static site in a real browser: English by default, no Ukrainian left in English mode,
 the EN / UK switch works and is remembered, ?lang= overrides it, no horizontal scroll on a phone,
-no console errors.
+no console errors, and the forecast says what its percentages mean (the "?" explanation, keyboard included).
 
 Needs Node.js with the `playwright` package (NODE_PATH from AIRRAID_UI_NODE_PATH or `npm root -g`)
 and a Chromium it can launch (AIRRAID_UI_CHANNEL=chrome uses the installed Google Chrome). Skipped
@@ -73,6 +73,14 @@ def test_ui_in_a_browser(node_env, site_url):
     assert res["lang0"] == "en"  # the browser asks for Ukrainian; English is the default anyway
     assert {k: v for k, v in res["cyrillic"].items() if v} == {}  # no Ukrainian left in English mode
     assert res["raionRows"] > 0  # the oblast panel lists its raions
+    # the forecast says what it is about and what its percentages mean; "?" works from the keyboard
+    info = res["info"]
+    assert "any type" in info["open"]["heading"].lower()
+    assert info["open"]["expanded"] == "true" and info["open"]["visible"]
+    assert "7 in 10" in info["open"]["text"] and "any type" in info["open"]["text"]
+    assert info["closed"] == {"expanded": "false", "hidden": True, "focused": True}  # Escape closes, focus returns
+    assert "any type" in info["rankNote"] and "7 in 10" in info["rankNote"]
+    assert "Chance of an alert (any type)" in info["rankHead"]
     assert res["ukLang"] == "uk" and res["ukText"]
     assert res["remembered"] == "uk" and res["ukMapText"]  # the choice survives a reload
     assert res["override"] == "en"  # ?lang=en wins over the remembered choice

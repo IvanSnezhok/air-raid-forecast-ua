@@ -30,6 +30,24 @@ const CYR = /[Ѐ-ӿ]/;
   await page.waitForSelector("#stats .chartbox");
   await check("oblast");
   const raionRows = await page.$$eval(".rrow", (x) => x.length);
+  // "what do the percentages mean": a keyboard-operable "?" next to the forecast opens the full definition
+  const info = {};
+  await page.focus("#detail .info-btn");
+  await page.keyboard.press("Enter");
+  info.open = await page.evaluate(() => {
+    const b = document.querySelector("#detail .info-btn"), box = document.getElementById(b.getAttribute("aria-controls"));
+    return { expanded: b.getAttribute("aria-expanded"), visible: !!box && !box.hidden && box.offsetHeight > 0,
+      text: box ? box.innerText : "", heading: document.querySelector("#detail h3")?.innerText || "" };
+  });
+  await check("oblast-explained");
+  await page.keyboard.press("Escape");
+  info.closed = await page.evaluate(() => {
+    const b = document.querySelector("#detail .info-btn");
+    return { expanded: b.getAttribute("aria-expanded"), hidden: document.getElementById(b.getAttribute("aria-controls")).hidden,
+      focused: document.activeElement === b };
+  });
+  info.rankNote = await page.evaluate(() => document.querySelector("#rank-note")?.innerText || "");
+  info.rankHead = await page.evaluate(() => document.querySelector("#rank thead")?.innerText || "");
   await page.click("#layer button[data-v=forecast]");
   await check("forecast");
   await page.click("#target button[data-v=onset]");
@@ -72,6 +90,6 @@ const CYR = /[Ѐ-ӿ]/;
   await mp.waitForTimeout(500);
   const overflow = await mp.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
 
-  console.log(JSON.stringify({ lang0, cyrillic, raionRows, ukLang, ukText, remembered, ukMapText, override, overflow, errors }));
+  console.log(JSON.stringify({ lang0, cyrillic, raionRows, info, ukLang, ukText, remembered, ukMapText, override, overflow, errors }));
   await browser.close();
 })().catch((e) => { console.log(JSON.stringify({ fatal: String(e && e.stack || e) })); process.exit(1); });

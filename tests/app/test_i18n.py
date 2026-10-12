@@ -42,7 +42,7 @@ def used_keys() -> set[str]:
     for attr in re.findall(r'data-i18n-attr="([^"]+)"', HTML):
         keys |= {pair.split(":")[1].strip() for pair in attr.split(";")}
     # keys built at run time: t(`family.${...}`)
-    keys |= {f"lvl.{i}" for i in range(4)} | {f"likely.{i}" for i in range(4)} | {"lvlc.yellow", "lvlc.red"}
+    keys |= {f"lvl.{i}" for i in range(4)} | {"lvlc.yellow", "lvlc.red"}
     keys |= {f"{fam}.{t}" for fam in ("type", "typeShort", "typePhrase") for t in TYPES}
     keys |= {f"{fam}.{m}" for fam in ("method", "methodLong") for m in METHOD_UK}
     keys |= {f"live.{lv}" for lv in ("oblast", "raion", "hromada")}
@@ -57,7 +57,7 @@ def _engine_codes() -> set[str]:
 
 
 def test_dynamic_families_are_used_as_expected():
-    for fam in ("lvl.", "likely.", "lvlc.", "type.", "typeShort.", "typePhrase.", "method.", "methodLong.", "live.", "load.", "target."):
+    for fam in ("lvl.", "lvlc.", "type.", "typeShort.", "typePhrase.", "method.", "methodLong.", "live.", "load.", "target."):
         assert f"t(`{fam}${{" in APP, fam
 
 
@@ -101,3 +101,42 @@ def test_english_is_the_default():
     # the visible static text of index.html is English before the script runs (no flash of Ukrainian)
     for m in re.finditer(r'<(\w+)[^>]*data-i18n="([\w.]+)"[^>]*>([^<]*)<', HTML):
         assert not CYR.search(m.group(3)), m.group(2)
+
+
+# --- what the percentages mean (the owner's two questions: "a percentage of what?" and "which alert?")
+ANY_TYPE = {"en": "any type", "uk": "будь-якого типу"}
+
+
+@pytest.mark.parametrize("lang", ["en", "uk"])
+def test_forecast_labels_say_any_type_of_alert(lang):
+    d = I18N[lang]
+    for key in ("detail.forecast", "raion.forecast", "detail.note", "raion.note", "rank.note", "rank.noteRaions",
+                "legend.probActive", "legend.probOnset", "head.next", "rank.grpActive", "rank.grpRaion",
+                "rlist.cap", "stats.histFc", "ctl.activeTitle", "ctl.onsetTitle", "ex.what"):
+        assert ANY_TYPE[lang] in d[key], (lang, key)
+
+
+@pytest.mark.parametrize("lang", ["en", "uk"])
+def test_percentages_say_what_they_are(lang):
+    d = I18N[lang]
+    seven = {"en": "7 in 10", "uk": "7 з 10"}[lang]
+    for key in ("detail.note", "raion.note", "rank.note", "rank.noteRaions", "legend.pctHint", "ex.pct"):
+        assert "70%" in d[key] and seven in d[key], (lang, key)
+    # threat type is conditional on an alert starting and is not the chance of an alert
+    not_chance = {"en": "not the chance of an alert", "uk": "не ймовірність тривоги"}[lang]
+    for key in ("types.sub", "ex.types", "legend.typeNote", "ctl.typeTitle"):
+        assert not_chance in d[key].lower().replace("не є ймовірністю тривоги", "не ймовірність тривоги"), (lang, key)
+    # history charts are a share of time, the forecast is a chance
+    assert d["stats.histBar"] != d["stats.histFc"]
+    # model-quality percentages are scores
+    assert "Brier" in d["m.pctNote"]
+
+
+def test_risk_thresholds_match_the_code():
+    """The risk words are generated from LEVEL_CUTS in the "?" explanation; the How-it-works page states them too."""
+    cuts = [float(x) for x in re.search(r"const LEVEL_CUTS = \[([^\]]+)\]", APP).group(1).split(",")][:3]
+    pcts = [round(c * 100) for c in cuts]
+    assert pcts == [15, 40, 70]
+    assert f"below {pcts[0]}%, moderate {pcts[0]}–{pcts[1] - 1}%, high {pcts[1]}–{pcts[2] - 1}%" in HTML
+    assert f"{pcts[2]}% or more" in HTML
+    assert f"менше {pcts[0]}%, помірна {pcts[0]}–{pcts[1] - 1}%, висока {pcts[1]}–{pcts[2] - 1}%" in HTML
