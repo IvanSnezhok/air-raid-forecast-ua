@@ -191,18 +191,18 @@ def frame(parts: list[pd.DataFrame], origin: pd.Timestamp) -> pd.DataFrame:
     df = pd.concat(parts, ignore_index=True)
     df.insert(0, "origin", origin)
     num = ["p", "p_hist", "base", *(f"g_{g}" for g in GROUPS)]
-    df[num] = df[num].astype(np.float64).round(4)
+    df[num] = df[num].astype(np.float64).round(4).astype(np.float32)  # ~30 KB per run in the store
     df[list(SIGNAL_COLS)] = df[list(SIGNAL_COLS)].astype(np.float32)
     return df
 
 
 # ---------------------------------------------------------------------- serving
-def _num(v) -> float | None:
+def _num(v, nd: int | None = None) -> float | None:
     try:
         v = float(v)
     except (TypeError, ValueError):
         return None
-    return v if math.isfinite(v) else None
+    return (round(v, nd) if nd is not None else v) if math.isfinite(v) else None
 
 
 def signals(row) -> list[dict]:
@@ -264,8 +264,8 @@ def payload(rows: pd.DataFrame) -> dict | None:
         groups = {g: round(float(r[f"g_{g}"]), 4) for g in GROUPS
                   if f"g_{g}" in r and _num(r[f"g_{g}"]) is not None}
         items.setdefault(str(r["target"]), {})[str(int(r["horizon"]))] = {
-            "model": r["model"], "p": _num(r["p"]), "p_hist": _num(r["p_hist"]), "text": r["text"],
-            "base": _num(r["base"]), "groups": groups,
+            "model": r["model"], "p": _num(r["p"], 4), "p_hist": _num(r["p_hist"], 4), "text": r["text"],
+            "base": _num(r["base"], 4), "groups": groups,
         }
     first = rows.iloc[0].to_dict()
     return {"items": items, "signals": signals(first), "has_text": _num(first.get("tg_reg_any_180m")) is not None}

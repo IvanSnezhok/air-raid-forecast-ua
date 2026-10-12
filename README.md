@@ -426,6 +426,8 @@ live-data/<kind>/<YYYY-MM-DD>/<stamp>-<hash>.parquet   one immutable file per ap
   forecasts       origin, issued_at, region, target, horizon, p, clim, active_now,
                   trained_until, hist_end, git_sha, live
   verification    scored forecasts, verified_at, label_source
+  explanations    why each forecast (src/airraid/explain.py), issued_at as in forecasts: served
+                  model, p, history-only p_hist, reason, base + grouped log-odds drivers, signal counts
 live-data/_state/history.json   collector bookkeeping (resume, If-Modified-Since)
 live-data/_state/pipeline.json  the last pipeline run: time, step timings, data ends (= the site's api/status.json)
 ```
