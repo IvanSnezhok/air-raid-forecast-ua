@@ -1,32 +1,32 @@
 {
- "updated_at": "2026-10-12T06:58:04+00:00",
+ "updated_at": "2026-10-12T07:09:26+00:00",
  "source": "pipeline",
- "origin": "2026-10-12T06:57Z",
- "issued_at": "2026-10-12T06:57:16Z",
- "last_poll": "2026-10-12T06:56:46Z",
+ "origin": "2026-10-12T07:07Z",
+ "issued_at": "2026-10-12T07:08:39Z",
+ "last_poll": "2026-10-12T07:06:41Z",
  "dataset_end": "2026-10-12T04:49Z",
  "record_complete_until": "2026-10-12T04:49Z",
  "model": {
   "trained_until": "2026-10-12T04:00:00+00:00",
-  "trained_at": "2026-10-12T05:38:54.454900+00:00",
-  "holdout": true,
+  "trained_at": "2026-10-12T07:08:38.451397+00:00",
+  "holdout": false,
   "code_version": "96bc342478d9",
-  "served": "lightgbm,lightgbm_text",
-  "text_status": "ok"
+  "served": "lightgbm",
+  "text_status": "text model unavailable: no saved text model in var/models/text and training is off (AIRRAID_TEXT_TRAIN=0)"
  },
  "raions": {
-  "models_source": "saved",
+  "models_source": "none",
   "tier": "live_state",
   "n_raions": 119,
-  "n_active": 34,
+  "n_active": 32,
   "methods": {
-   "lightgbm_state": 952
+   "oblast_x_share": 952
   }
  },
- "threat_type_origin": "2026-10-12T06:57Z",
+ "threat_type_origin": "2026-10-12T07:07Z",
  "verification": {
   "n_verified": 3072,
-  "pending": 3072,
+  "pending": 3264,
   "by_label_source": {
    "dataset": 3072
   },
@@ -78,26 +78,26 @@
   }
  },
  "steps_s": {
-  "setup": 26.7,
+  "setup": 24.1,
   "checkout_store": 0.6,
-  "dataset": 0.8,
-  "poll": 1.0,
-  "wait_origin": 15.5,
-  "text_collect": 9.5,
-  "forecast": 4.7,
-  "threat_type": 23.2,
+  "dataset": 0.6,
+  "poll": 0.7,
+  "wait_origin": 20.3,
+  "text_collect": 8.7,
+  "forecast": 88.4,
+  "threat_type": 22.7,
   "verify": 2.4,
-  "build_site": 22.4
+  "build_site": 20.8
  },
  "failed_steps": [],
- "elapsed_s": 108.0,
+ "elapsed_s": 191.5,
  "run": {
-  "id": "38215002364",
-  "url": "https://github.com/IvanSnezhok/air-raid-forecast-ua/actions/runs/38215002364",
+  "id": "38215892215",
+  "url": "https://github.com/IvanSnezhok/air-raid-forecast-ua/actions/runs/38215892215",
   "event": "workflow_dispatch",
   "trigger": "keepalive",
-  "hop": "7",
+  "hop": "8",
   "ref": "main",
-  "sha": "43c3a963b2a4d73e4c3f365fa3d8fea2a7093c39"
+  "sha": "26f9134dcad1814d5c9561f5ba5d6335c2395251"
  }
 }
