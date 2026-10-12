@@ -14,10 +14,6 @@ name: train
 on:
   schedule:
     - cron: "37 4 * * *"
-  # TEMPORARY: end-to-end test from the feature branch; removed before merge
-  push:
-    branches: [claude/dazzling-darwin-jlnlqj-automation]
-    paths: [".github/workflows/train.yml"]
   workflow_dispatch:
 
 concurrency:

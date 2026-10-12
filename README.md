@@ -674,7 +674,8 @@ Everything runs on GitHub Actions; nothing needs a laptop or a server.
    3 download the dataset                                          oblast models + holdout week, raion
      (+ official raion file, cached)                               models, history + Telegram models
    4 poll alerts.in.ua              → store: polls, alerts_active
-   5 update the text archive        → text-data: new Telegram posts and news (pipeline = only writer)
+   5 update the text archive        → text-data: new Telegram posts and news (pipeline = only writer),
+                                      fetched once the origin minute has begun (0–60 s wait)
    6 forecast (predict_now.py)      → store: forecasts, with the served model per row (history-only
                                       or history + Telegram); trains once only if no oblast models
    7 threat type (after 6)          P(onset) × P(type | onset), same origin, posts from text-data
@@ -789,7 +790,11 @@ Telegram models to `<models>/text`. The pipeline sets `AIRRAID_RAION_TRAIN=0` an
 `AIRRAID_TEXT_TRAIN=0`, so the forecast and the site build only load them: without saved
 raion models the raion forecast is oblast × share (`models_source: "none"`), without text
 models the history-only model serves (`text_status` says why), and the next train run is
-requested. The cache key hashes the raion and text code and selections too. `status.json`
+requested. The text features at the origin need the archive complete up to it, and the
+origin is the first whole minute after the poll, so the archive update waits for that
+minute to begin (`pipeline.py wait-origin`, about 30 s on average) rather than serve
+the history-only model for want of a few seconds of coverage. The cache key hashes the
+raion and text code and selections too. `status.json`
 reports the served model (`model.served`, `model.text_status`) and the raion layer
 (`raions.models_source`, `tier`, and how many values each method produced).
 
