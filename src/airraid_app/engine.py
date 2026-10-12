@@ -81,6 +81,7 @@ class ForecastEngine:
         self.lock = threading.RLock()
         self.status = "starting"  # starting | loading | training | ready | error
         self.message = "Запуск"
+        self.message_code: dict = {"code": "starting"}  # the same, language-neutral (the UI translates it)
         self.alerts: pd.DataFrame | None = None
         self.regions: list[str] = []
         self.hist_end: pd.Timestamp | None = None
@@ -108,7 +109,7 @@ class ForecastEngine:
     # ------------------------------------------------------------------ data
     def load_data(self, refresh: bool | None = None) -> None:
         refresh = self.s.download if refresh is None else refresh
-        self._set("loading", "Завантаження історії тривог")
+        self._set("loading", "Завантаження історії тривог", {"code": "loading_history"})
         if refresh:
             try:
                 download(self.s.data_path)
@@ -137,14 +138,15 @@ class ForecastEngine:
             alerts = self.alerts
         if alerts is None:
             raise NotReady("no data")
-        self._set("training", "Навчання моделей")
+        self._set("training", "Навчання моделей", {"code": "training"})
         plan, source = training.plans(self.s.reports_dir, self.s.train_months, self.s.max_train_months, self.s.n_trees)
         models, meta, holdout = training.train(
             alerts, plan, self.s.holdout_days, self.s.lgb_threads, selection_source=source,
-            progress=lambda n, total: self._set("training", f"Навчання моделей ({n}/{total})"))
+            progress=lambda n, total: self._set("training", f"Навчання моделей ({n}/{total})",
+                                               {"code": "training", "n": n, "total": total}))
         training.save(self.s.model_dir, models, meta, holdout)
         if self.text is not None:
-            self._set("training", "Навчання моделі з Telegram-сигналами")
+            self._set("training", "Навчання моделі з Telegram-сигналами", {"code": "training_text"})
             data_end = pd.Timestamp(meta["data_end"])
             grid = build_grid(alerts, data_end=data_end)
             self.text.ensure_models(grid, hourly_fraction(grid), hourly_starts(grid), data_end, self.s.retrain_h)
@@ -152,7 +154,7 @@ class ForecastEngine:
         with self.lock:
             self.models, self.meta, self.holdout = models, meta, holdout
             self._forecast = None
-        self._set("ready", "Готово")
+        self._set("ready", "Готово", {"code": "ready"})
         log.info("trained %d models in %.0fs", len(models), meta["train_seconds"])
 
     def load_models(self) -> bool:
@@ -182,7 +184,7 @@ class ForecastEngine:
         with self.lock:
             self.models, self.meta, self.holdout = models, meta, holdout
             self._forecast = None
-        self._set("ready", "Готово")
+        self._set("ready", "Готово", {"code": "ready"})
         log.info("loaded saved models trained on data to %s", meta["data_end"])
         return True
 
@@ -220,7 +222,8 @@ class ForecastEngine:
                 raion_live = (states, unmatched, state.as_of)
             except Exception as e:
                 log.warning("alerts.in.ua failed: %s", e)
-                state = state_from_dataset(alerts, regions, error=f"alerts.in.ua недоступний: {type(e).__name__}")
+                state = state_from_dataset(alerts, regions, error=f"alerts.in.ua недоступний: {type(e).__name__}",
+                                           error_code={"code": "live_unavailable", "error": type(e).__name__})
         if state is None:
             state = state_from_dataset(alerts, regions)
         self.recorder.observe(state)
@@ -246,7 +249,8 @@ class ForecastEngine:
                 return snap
         if seen is None or seen < hist_end or now - seen > pd.Timedelta(hours=LIVE_EXPIRY_HOURS):
             live = state_from_dataset(alerts, regions, error=None if seen is None else
-                                      f"Останнє опитування alerts.in.ua було {_kyiv(seen)}: показано стан на кінець датасету.")
+                                      f"Останнє опитування alerts.in.ua було {_kyiv(seen)}: показано стан на кінець датасету.",
+                                      error_code=None if seen is None else {"code": "live_stale", "seen": _iso(seen)})
             origin, records, covered = hist_end.floor("h"), None, None
         else:
             origin = nowcast.origin_after(seen)
@@ -395,15 +399,19 @@ class ForecastEngine:
             }
             for h in HORIZONS
         }
-        warnings = []
+        # warnings: Ukrainian text (kept for API clients) and the same as language-neutral codes for the UI
+        warnings, warning_codes = [], []
         if live.source == "dataset":
             warnings.append("Немає живих даних (ALERTS_IN_UA_TOKEN не задано або API недоступне): "
                             "прогноз зроблено станом на кінець датасету.")
+            warning_codes.append({"code": "no_live"})
         elif gap_h > 6:
             warnings.append(f"Історія закінчується за {gap_h:.0f} год до моменту прогнозу: "
                             "ознаки за останні години можуть бути занижені.")
+            warning_codes.append({"code": "history_gap", "hours": round(float(gap_h))})
         if live.error:
             warnings.append(live.error)
+            warning_codes.append(live.error_code or {"code": "live_error", "text": live.error})
         return {
             "origin": _iso(origin),
             "origin_kyiv": _kyiv(origin),
@@ -413,6 +421,7 @@ class ForecastEngine:
             "horizons": list(HORIZONS),
             "windows": windows,
             "warnings": warnings,
+            "warning_codes": warning_codes,
             "model": {**{k: meta.get(k) for k in ("trained_at", "data_end", "selection_source")},
                       "served": sorted(set(probs_long["model"])) if "model" in probs_long else ["lightgbm"],
                       "text_status": str(probs_long["text_status"].iloc[0])
@@ -553,8 +562,9 @@ class ForecastEngine:
         return out
 
     # ------------------------------------------------------------ lifecycle
-    def _set(self, status: str, message: str) -> None:
+    def _set(self, status: str, message: str, code: dict | None = None) -> None:
         self.status, self.message = status, message
+        self.message_code = code or {"code": status}
 
     def bootstrap(self) -> None:
         try:
@@ -564,7 +574,7 @@ class ForecastEngine:
             self.forecast()
         except Exception as e:
             log.exception("bootstrap failed")
-            self._set("error", f"Помилка: {e}")
+            self._set("error", f"Помилка: {e}", {"code": "error", "error": str(e)})
 
     def tick(self) -> None:
         """One step of the background loop: refresh data, retrain when stale, precompute the forecast."""
@@ -586,7 +596,7 @@ class ForecastEngine:
             except Exception:
                 log.exception("background refresh failed")
                 if not self.models:
-                    self._set("error", "Помилка оновлення, див. логи")
+                    self._set("error", "Помилка оновлення, див. логи", {"code": "refresh_error"})
 
     def start_background(self) -> threading.Thread:
         th = threading.Thread(target=self.run_forever, name="forecast-engine", daemon=True)

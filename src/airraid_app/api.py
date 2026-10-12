@@ -39,22 +39,27 @@ def create_app(settings: Settings | None = None, engine: ForecastEngine | None =
     )
     app.state.engine = engine
 
+    def _not_ready() -> dict:
+        # message: Ukrainian text (kept for API clients); code: the same, language-neutral, for the UI
+        return {"status": engine.status, "message": engine.message, "code": engine.message_code}
+
     def _ready():
         if engine.alerts is None:
-            raise HTTPException(503, detail={"status": engine.status, "message": engine.message})
+            raise HTTPException(503, detail=_not_ready())
 
     async def _forecast() -> dict:
         _ready()
         try:
             return await run_in_threadpool(engine.forecast)
         except NotReady:
-            raise HTTPException(503, detail={"status": engine.status, "message": engine.message})
+            raise HTTPException(503, detail=_not_ready())
 
     @app.get("/api/health", tags=["service"])
     def health():
         return {
             "status": engine.status,
             "message": engine.message,
+            "message_code": engine.message_code,
             "version": __version__,
             "live_api_configured": bool(settings.alerts_token),
             "history_end": engine.hist_end.isoformat() if engine.hist_end is not None else None,
@@ -176,7 +181,7 @@ def create_app(settings: Settings | None = None, engine: ForecastEngine | None =
     @app.get("/api/metrics", tags=["evaluation"], summary="Якість моделей")
     def metrics():
         if not engine.meta:
-            raise HTTPException(503, detail={"status": engine.status, "message": engine.message})
+            raise HTTPException(503, detail=_not_ready())
         return engine.metrics()
 
     @app.get("/", include_in_schema=False)

@@ -28,6 +28,8 @@ def test_forecast_shape_and_range(client):
     body = client.get("/api/forecast").json()
     assert body["horizons"] == list(HORIZONS)
     assert body["live_source"] == "dataset" and body["warnings"]
+    # the same warnings as language-neutral codes, translated by the UI
+    assert len(body["warning_codes"]) == len(body["warnings"]) and body["warning_codes"][0]["code"] == "no_live"
     assert len(body["regions"]) == len(REGIONS)
     for r in body["regions"]:
         for t in ("active", "onset"):
@@ -85,7 +87,8 @@ def test_not_ready_returns_503(settings):
     from airraid_app.engine import ForecastEngine
 
     with TestClient(create_app(settings, ForecastEngine(settings))) as c:
-        assert c.get("/api/forecast").status_code == 503
+        r = c.get("/api/forecast")
+        assert r.status_code == 503 and r.json()["detail"]["code"] == {"code": "starting"}  # the UI translates the code
         assert c.get("/api/health").json()["status"] == "starting"
 
 
