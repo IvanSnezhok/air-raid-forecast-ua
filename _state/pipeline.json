@@ -1,11 +1,11 @@
 {
- "updated_at": "2026-10-16T17:46:21+00:00",
+ "updated_at": "2026-10-16T17:55:10+00:00",
  "source": "pipeline",
- "origin": "2026-10-16T17:43Z",
- "issued_at": "2026-10-16T17:43:21Z",
- "last_poll": "2026-10-16T17:42:01Z",
+ "origin": "2026-10-16T17:53Z",
+ "issued_at": "2026-10-16T17:53:19Z",
+ "last_poll": "2026-10-16T17:52:34Z",
  "dataset_end": "2026-10-16T03:24Z",
- "record_complete_until": "2026-10-16T17:42Z",
+ "record_complete_until": "2026-10-16T17:52Z",
  "model": {
   "trained_until": "2026-10-16T03:00:00+00:00",
   "trained_at": "2026-10-16T09:17:46.292654+00:00",
@@ -18,18 +18,18 @@
   "models_source": "saved",
   "tier": "history",
   "n_raions": 119,
-  "n_active": 62,
+  "n_active": 55,
   "methods": {
    "lightgbm": 952
   }
  },
- "threat_type_origin": "2026-10-16T17:43Z",
+ "threat_type_origin": "2026-10-16T17:53Z",
  "verification": {
-  "n_verified": 124560,
-  "pending": 3504,
+  "n_verified": 124800,
+  "pending": 3456,
   "by_label_source": {
    "dataset": 107520,
-   "store": 17040
+   "store": 17280
   },
   "windows": {
    "24h": [
@@ -38,70 +38,70 @@
      "horizon_h": 1,
      "n": 3336,
      "n_origins": 139,
-     "brier_model": 0.23048500945443645,
-     "brier_clim": 0.2655188385581535,
-     "skill_vs_clim": 0.1319447964368976,
-     "hit_rate_at_0.5": 0.6906474820143885
+     "brier_model": 0.23068965053657076,
+     "brier_clim": 0.26547687610911275,
+     "skill_vs_clim": 0.131036744451687,
+     "hit_rate_at_0.5": 0.690347721822542
     },
     {
      "target": "onset",
      "horizon_h": 3,
-     "n": 3024,
-     "n_origins": 126,
-     "brier_model": 0.19860834065145502,
-     "brier_clim": 0.24131247584986773,
-     "skill_vs_clim": 0.17696613093879587,
-     "hit_rate_at_0.5": 0.7023809523809523
+     "n": 3048,
+     "n_origins": 127,
+     "brier_model": 0.19782514965551182,
+     "brier_clim": 0.24061894532808403,
+     "skill_vs_clim": 0.17784882073280994,
+     "hit_rate_at_0.5": 0.7037401574803149
     }
    ],
    "7d": [
     {
      "target": "active",
      "horizon_h": 1,
-     "n": 15864,
-     "n_origins": 661,
-     "brier_model": 0.25653899422213816,
-     "brier_clim": 0.23273177385400906,
-     "skill_vs_clim": -0.10229467156067473,
-     "hit_rate_at_0.5": 0.6782022188603126
+     "n": 15888,
+     "n_origins": 662,
+     "brier_model": 0.2564600016931017,
+     "brier_clim": 0.23277063444297585,
+     "skill_vs_clim": -0.10177128788953516,
+     "hit_rate_at_0.5": 0.6782477341389728
     },
     {
      "target": "onset",
      "horizon_h": 3,
-     "n": 15552,
-     "n_origins": 648,
-     "brier_model": 0.20159442837512861,
-     "brier_clim": 0.2184244215772891,
-     "skill_vs_clim": 0.07705179247186533,
-     "hit_rate_at_0.5": 0.6783050411522634
+     "n": 15600,
+     "n_origins": 650,
+     "brier_model": 0.20138593430192306,
+     "brier_clim": 0.21827940301666665,
+     "skill_vs_clim": 0.07739378283645804,
+     "hit_rate_at_0.5": 0.6786538461538462
     }
    ]
   }
  },
  "calibration": {
   "n_active": 5,
-  "fitted_at": "2026-10-16T17:43:45+00:00",
+  "fitted_at": "2026-10-16T17:53:32+00:00",
   "applied_to_this_forecast": 5
  },
  "steps_s": {
-  "setup": 29.2,
-  "checkout_store": 2.6,
+  "setup": 19.6,
+  "checkout_store": 3.3,
   "dataset": 0.9,
-  "poll": 0.8,
-  "wait_origin": 59.8,
-  "text_collect": 11.9,
-  "forecast": 7.4,
-  "threat_type": 22.6,
-  "verify": 18.3,
-  "build_site": 138.1
+  "poll": 0.9,
+  "wait_origin": 27.3,
+  "text_collect": 13.3,
+  "forecast": 4.4,
+  "threat_type": 12.5,
+  "verify": 10.7,
+  "build_site": 87.2
  },
  "failed_steps": [],
- "elapsed_s": 294.3,
+ "elapsed_s": 181.7,
  "run": {
-  "id": "38941585303",
-  "url": "https://github.com/IvanSnezhok/air-raid-forecast-ua/actions/runs/38941585303",
-  "event": "workflow_dispatch",
-  "trigger": "pinger",
+  "id": "38942944278",
+  "url": "https://github.com/IvanSnezhok/air-raid-forecast-ua/actions/runs/38942944278",
+  "event": "schedule",
+  "trigger": "schedule",
   "hop": "0",
   "ref": "main",
   "sha": "eb76c1a7b032959e7e130a7ad5f29b97ede49152"
