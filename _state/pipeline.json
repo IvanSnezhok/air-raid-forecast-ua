@@ -1,11 +1,11 @@
 {
- "updated_at": "2026-10-17T22:46:46+00:00",
+ "updated_at": "2026-10-17T22:59:21+00:00",
  "source": "pipeline",
- "origin": "2026-10-17T22:43Z",
- "issued_at": "2026-10-17T22:43:23Z",
- "last_poll": "2026-10-17T22:42:03Z",
+ "origin": "2026-10-17T22:57Z",
+ "issued_at": "2026-10-17T22:57:16Z",
+ "last_poll": "2026-10-17T22:56:14Z",
  "dataset_end": "2026-10-17T03:26Z",
- "record_complete_until": "2026-10-17T22:42Z",
+ "record_complete_until": "2026-10-17T22:56Z",
  "model": {
   "trained_until": "2026-10-17T03:00:00+00:00",
   "trained_at": "2026-10-17T08:49:30.807472+00:00",
@@ -18,90 +18,90 @@
   "models_source": "saved",
   "tier": "history",
   "n_raions": 119,
-  "n_active": 33,
+  "n_active": 36,
   "methods": {
    "lightgbm": 952
   }
  },
- "threat_type_origin": "2026-10-17T22:43Z",
+ "threat_type_origin": "2026-10-17T22:57Z",
  "verification": {
-  "n_verified": 155376,
+  "n_verified": 155568,
   "pending": 3216,
   "by_label_source": {
    "dataset": 134352,
-   "store": 21024
+   "store": 21216
   },
   "windows": {
    "24h": [
     {
      "target": "active",
      "horizon_h": 1,
-     "n": 3096,
-     "n_origins": 129,
-     "brier_model": 0.19654681029715765,
-     "brier_clim": 0.2199158335852713,
-     "skill_vs_clim": 0.1062634868400798,
-     "hit_rate_at_0.5": 0.7422480620155039
+     "n": 3072,
+     "n_origins": 128,
+     "brier_model": 0.19449556830403644,
+     "brier_clim": 0.22013558917643228,
+     "skill_vs_clim": 0.11647376495695161,
+     "hit_rate_at_0.5": 0.7447916666666666
     },
     {
      "target": "onset",
      "horizon_h": 3,
-     "n": 2832,
-     "n_origins": 118,
-     "brier_model": 0.1843998364759887,
-     "brier_clim": 0.2068343076977401,
-     "skill_vs_clim": 0.10846590912053289,
-     "hit_rate_at_0.5": 0.7189265536723164
+     "n": 2808,
+     "n_origins": 117,
+     "brier_model": 0.1836528457977208,
+     "brier_clim": 0.2058515448539886,
+     "skill_vs_clim": 0.10783838941803159,
+     "hit_rate_at_0.5": 0.7193732193732194
     }
    ],
    "7d": [
     {
      "target": "active",
      "horizon_h": 1,
-     "n": 19680,
-     "n_origins": 820,
-     "brier_model": 0.2597838582637195,
-     "brier_clim": 0.22537200748373987,
-     "skill_vs_clim": -0.15268910795171586,
-     "hit_rate_at_0.5": 0.6741869918699187
+     "n": 19704,
+     "n_origins": 821,
+     "brier_model": 0.2596155862662404,
+     "brier_clim": 0.22536440716250508,
+     "skill_vs_clim": -0.1519813156610732,
+     "hit_rate_at_0.5": 0.6744823386114495
     },
     {
      "target": "onset",
      "horizon_h": 3,
-     "n": 19416,
-     "n_origins": 809,
-     "brier_model": 0.19566528022764731,
-     "brier_clim": 0.21289264157756493,
-     "skill_vs_clim": 0.08092041708093056,
-     "hit_rate_at_0.5": 0.6913885455294603
+     "n": 19440,
+     "n_origins": 810,
+     "brier_model": 0.19566997521656382,
+     "brier_clim": 0.21289939742952677,
+     "skill_vs_clim": 0.08092752925083391,
+     "hit_rate_at_0.5": 0.6914609053497942
     }
    ]
   }
  },
  "calibration": {
-  "n_active": 4,
-  "fitted_at": "2026-10-17T22:43:47+00:00",
-  "applied_to_this_forecast": 3
+  "n_active": 3,
+  "fitted_at": "2026-10-17T22:57:29+00:00",
+  "applied_to_this_forecast": 4
  },
  "steps_s": {
-  "setup": 32.8,
-  "checkout_store": 2.2,
-  "dataset": 0.7,
-  "poll": 0.8,
-  "wait_origin": 57.8,
-  "text_collect": 13.7,
-  "forecast": 7.5,
-  "threat_type": 23.0,
-  "verify": 21.9,
-  "build_site": 157.1
+  "setup": 18.9,
+  "checkout_store": 2.5,
+  "dataset": 0.9,
+  "poll": 0.7,
+  "wait_origin": 47.0,
+  "text_collect": 9.8,
+  "forecast": 4.4,
+  "threat_type": 12.7,
+  "verify": 12.2,
+  "build_site": 99.4
  },
  "failed_steps": [],
- "elapsed_s": 320.1,
+ "elapsed_s": 210.2,
  "run": {
-  "id": "39076080128",
-  "url": "https://github.com/IvanSnezhok/air-raid-forecast-ua/actions/runs/39076080128",
-  "event": "workflow_dispatch",
-  "trigger": "pinger",
+  "id": "39077017227",
+  "url": "https://github.com/IvanSnezhok/air-raid-forecast-ua/actions/runs/39077017227",
+  "event": "schedule",
+  "trigger": "schedule",
   "hop": "0",
   "ref": "main",
   "sha": "eb76c1a7b032959e7e130a7ad5f29b97ede49152"
