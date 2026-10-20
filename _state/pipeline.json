@@ -1,11 +1,11 @@
 {
- "updated_at": "2026-10-20T23:30:31+00:00",
+ "updated_at": "2026-10-20T23:47:13+00:00",
  "source": "pipeline",
- "origin": "2026-10-20T23:26Z",
- "issued_at": "2026-10-20T23:26:21Z",
- "last_poll": "2026-10-20T23:25:47Z",
+ "origin": "2026-10-20T23:43Z",
+ "issued_at": "2026-10-20T23:43:21Z",
+ "last_poll": "2026-10-20T23:42:05Z",
  "dataset_end": "2026-10-20T03:47Z",
- "record_complete_until": "2026-10-20T23:25Z",
+ "record_complete_until": "2026-10-20T23:42Z",
  "model": {
   "trained_until": "2026-10-20T03:00:00+00:00",
   "trained_at": "2026-10-20T09:39:00.756098+00:00",
@@ -18,18 +18,18 @@
   "models_source": "saved",
   "tier": "history",
   "n_raions": 119,
-  "n_active": 36,
+  "n_active": 45,
   "methods": {
    "lightgbm": 952
   }
  },
- "threat_type_origin": "2026-10-20T23:26Z",
+ "threat_type_origin": "2026-10-20T23:43Z",
  "verification": {
-  "n_verified": 201408,
-  "pending": 2880,
+  "n_verified": 201360,
+  "pending": 2736,
   "by_label_source": {
-   "dataset": 183168,
-   "store": 18240
+   "dataset": 182784,
+   "store": 18576
   },
   "windows": {
    "24h": [
@@ -38,20 +38,20 @@
      "horizon_h": 1,
      "n": 2568,
      "n_origins": 107,
-     "brier_model": 0.21588722473909655,
-     "brier_clim": 0.2676871141549844,
-     "skill_vs_clim": 0.19350908832278335,
-     "hit_rate_at_0.5": 0.7001557632398754
+     "brier_model": 0.21551426494937695,
+     "brier_clim": 0.2658134977453271,
+     "skill_vs_clim": 0.1892275344276959,
+     "hit_rate_at_0.5": 0.6997663551401869
     },
     {
      "target": "onset",
      "horizon_h": 3,
-     "n": 2328,
-     "n_origins": 97,
-     "brier_model": 0.155988090395189,
-     "brier_clim": 0.21180474472508592,
-     "skill_vs_clim": 0.26352881944332607,
-     "hit_rate_at_0.5": 0.7938144329896907
+     "n": 2352,
+     "n_origins": 98,
+     "brier_model": 0.15763340207482993,
+     "brier_clim": 0.21338114406887754,
+     "skill_vs_clim": 0.26125898910755085,
+     "hit_rate_at_0.5": 0.7908163265306123
     }
    ],
    "7d": [
@@ -60,48 +60,48 @@
      "horizon_h": 1,
      "n": 21984,
      "n_origins": 916,
-     "brier_model": 0.25701828962063317,
-     "brier_clim": 0.2225603420651383,
-     "skill_vs_clim": -0.15482519138746564,
-     "hit_rate_at_0.5": 0.6747634643377002
+     "brier_model": 0.25693616260280205,
+     "brier_clim": 0.22243094740311134,
+     "skill_vs_clim": -0.1551277625822316,
+     "hit_rate_at_0.5": 0.6746724890829694
     },
     {
      "target": "onset",
      "horizon_h": 3,
-     "n": 21744,
-     "n_origins": 906,
-     "brier_model": 0.18726276396799119,
-     "brier_clim": 0.20791987220244665,
-     "skill_vs_clim": 0.09935129343645477,
-     "hit_rate_at_0.5": 0.7108627667402502
+     "n": 21768,
+     "n_origins": 907,
+     "brier_model": 0.18736178805264608,
+     "brier_clim": 0.2081251884987137,
+     "skill_vs_clim": 0.09976399587114815,
+     "hit_rate_at_0.5": 0.7106762219772143
     }
    ]
   }
  },
  "calibration": {
   "n_active": 4,
-  "fitted_at": "2026-10-20T23:26:46+00:00",
+  "fitted_at": "2026-10-20T23:43:42+00:00",
   "applied_to_this_forecast": 4
  },
  "steps_s": {
-  "setup": 27.8,
-  "checkout_store": 2.1,
-  "dataset": 1.0,
-  "poll": 1.0,
-  "wait_origin": 13.7,
-  "text_collect": 10.7,
-  "forecast": 8.9,
-  "threat_type": 23.5,
-  "verify": 31.0,
-  "build_site": 194.5
+  "setup": 33.3,
+  "checkout_store": 3.3,
+  "dataset": 1.1,
+  "poll": 0.9,
+  "wait_origin": 56.3,
+  "text_collect": 12.1,
+  "forecast": 7.4,
+  "threat_type": 19.8,
+  "verify": 26.6,
+  "build_site": 185.3
  },
  "failed_steps": [],
- "elapsed_s": 315.5,
+ "elapsed_s": 347.9,
  "run": {
-  "id": "39514873114",
-  "url": "https://github.com/IvanSnezhok/air-raid-forecast-ua/actions/runs/39514873114",
-  "event": "schedule",
-  "trigger": "schedule",
+  "id": "39516629714",
+  "url": "https://github.com/IvanSnezhok/air-raid-forecast-ua/actions/runs/39516629714",
+  "event": "workflow_dispatch",
+  "trigger": "pinger",
   "hop": "0",
   "ref": "main",
   "sha": "eb76c1a7b032959e7e130a7ad5f29b97ede49152"
