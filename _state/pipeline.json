@@ -1,14 +1,14 @@
 {
- "updated_at": "2026-10-24T09:05:03+00:00",
+ "updated_at": "2026-10-24T09:16:39+00:00",
  "source": "pipeline",
- "origin": "2026-10-24T09:02Z",
- "issued_at": "2026-10-24T09:02:22Z",
- "last_poll": "2026-10-24T09:01:57Z",
+ "origin": "2026-10-24T09:13Z",
+ "issued_at": "2026-10-24T09:13:23Z",
+ "last_poll": "2026-10-24T09:12:05Z",
  "dataset_end": "2026-10-24T03:25Z",
- "record_complete_until": "2026-10-24T09:01Z",
+ "record_complete_until": "2026-10-24T09:12Z",
  "model": {
   "trained_until": "2026-10-24T03:00:00+00:00",
-  "trained_at": "2026-10-24T04:06:46.021095+00:00",
+  "trained_at": "2026-10-24T09:07:30.590092+00:00",
   "holdout": true,
   "code_version": "96bc342478d9",
   "served": "lightgbm,lightgbm_text",
@@ -18,88 +18,88 @@
   "models_source": "saved",
   "tier": "history",
   "n_raions": 119,
-  "n_active": 28,
+  "n_active": 30,
   "methods": {
    "lightgbm": 952
   }
  },
- "threat_type_origin": "2026-10-24T09:02Z",
+ "threat_type_origin": "2026-10-24T09:13Z",
  "verification": {
-  "n_verified": 181152,
-  "pending": 3360,
+  "n_verified": 181248,
+  "pending": 3264,
   "by_label_source": {
-   "dataset": 175152,
-   "store": 6000
+   "dataset": 174960,
+   "store": 6288
   },
   "windows": {
    "24h": [
     {
      "target": "active",
      "horizon_h": 1,
-     "n": 2568,
-     "n_origins": 107,
-     "brier_model": 0.20959482255451714,
-     "brier_clim": 0.19484977309968846,
-     "skill_vs_clim": -0.075673937004201,
-     "hit_rate_at_0.5": 0.7301401869158879
+     "n": 2616,
+     "n_origins": 109,
+     "brier_model": 0.21074491799311926,
+     "brier_clim": 0.19584798064220185,
+     "skill_vs_clim": -0.07606377815114107,
+     "hit_rate_at_0.5": 0.7285932721712538
     },
     {
      "target": "onset",
      "horizon_h": 3,
-     "n": 2304,
-     "n_origins": 96,
-     "brier_model": 0.17859752954861113,
-     "brier_clim": 0.18858959079427084,
-     "skill_vs_clim": 0.052983100517779214,
-     "hit_rate_at_0.5": 0.7092013888888888
+     "n": 2328,
+     "n_origins": 97,
+     "brier_model": 0.17908484555412374,
+     "brier_clim": 0.18914647409793814,
+     "skill_vs_clim": 0.05319490406469107,
+     "hit_rate_at_0.5": 0.7087628865979382
     }
    ],
    "7d": [
     {
      "target": "active",
      "horizon_h": 1,
-     "n": 19656,
-     "n_origins": 819,
-     "brier_model": 0.2521959071576109,
-     "brier_clim": 0.21624359431064305,
-     "skill_vs_clim": -0.16625839466634496,
-     "hit_rate_at_0.5": 0.6806064306064306
+     "n": 19680,
+     "n_origins": 820,
+     "brier_model": 0.2522836853470528,
+     "brier_clim": 0.21643044352439023,
+     "skill_vs_clim": -0.16565711014967333,
+     "hit_rate_at_0.5": 0.6805386178861789
     },
     {
      "target": "onset",
      "horizon_h": 3,
      "n": 19392,
      "n_origins": 808,
-     "brier_model": 0.1860566235715759,
-     "brier_clim": 0.20065447267533001,
-     "skill_vs_clim": 0.07275117723079239,
-     "hit_rate_at_0.5": 0.7035891089108911
+     "brier_model": 0.18614192830806517,
+     "brier_clim": 0.20079989662489686,
+     "skill_vs_clim": 0.07299788776392369,
+     "hit_rate_at_0.5": 0.703434405940594
     }
    ]
   }
  },
  "calibration": {
   "n_active": 0,
-  "fitted_at": "2026-10-24T09:02:39+00:00",
+  "fitted_at": "2026-10-24T09:13:46+00:00",
   "applied_to_this_forecast": 0
  },
  "steps_s": {
-  "setup": 28.8,
-  "checkout_store": 2.8,
+  "setup": 31.1,
+  "checkout_store": 3.0,
   "dataset": 1.1,
-  "poll": 0.8,
-  "wait_origin": 3.7,
+  "poll": 0.9,
+  "wait_origin": 56.1,
   "text_collect": 13.4,
-  "forecast": 6.7,
-  "threat_type": 16.5,
-  "verify": 20.9,
-  "build_site": 123.6
+  "forecast": 7.6,
+  "threat_type": 22.8,
+  "verify": 28.4,
+  "build_site": 144.3
  },
  "failed_steps": [],
- "elapsed_s": 219.7,
+ "elapsed_s": 311.3,
  "run": {
-  "id": "40080295461",
-  "url": "https://github.com/IvanSnezhok/air-raid-forecast-ua/actions/runs/40080295461",
+  "id": "40080957599",
+  "url": "https://github.com/IvanSnezhok/air-raid-forecast-ua/actions/runs/40080957599",
   "event": "workflow_dispatch",
   "trigger": "pinger",
   "hop": "0",
