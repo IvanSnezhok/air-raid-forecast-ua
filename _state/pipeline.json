@@ -1,11 +1,11 @@
 {
- "updated_at": "2026-10-28T14:16:28+00:00",
+ "updated_at": "2026-10-28T14:32:32+00:00",
  "source": "pipeline",
- "origin": "2026-10-28T14:13Z",
- "issued_at": "2026-10-28T14:13:22Z",
- "last_poll": "2026-10-28T14:12:08Z",
+ "origin": "2026-10-28T14:30Z",
+ "issued_at": "2026-10-28T14:30:23Z",
+ "last_poll": "2026-10-28T14:29:59Z",
  "dataset_end": "2026-10-28T04:01Z",
- "record_complete_until": "2026-10-28T14:12Z",
+ "record_complete_until": "2026-10-28T14:29Z",
  "model": {
   "trained_until": "2026-10-28T04:00:00+00:00",
   "trained_at": "2026-10-28T10:50:03.596326+00:00",
@@ -18,90 +18,90 @@
   "models_source": "saved",
   "tier": "history",
   "n_raions": 119,
-  "n_active": 26,
+  "n_active": 30,
   "methods": {
    "lightgbm": 952
   }
  },
- "threat_type_origin": "2026-10-28T14:13Z",
+ "threat_type_origin": "2026-10-28T14:30Z",
  "verification": {
-  "n_verified": 171264,
-  "pending": 2496,
+  "n_verified": 171504,
+  "pending": 2448,
   "by_label_source": {
    "dataset": 161808,
-   "store": 9456
+   "store": 9696
   },
   "windows": {
    "24h": [
     {
      "target": "active",
      "horizon_h": 1,
-     "n": 2448,
-     "n_origins": 102,
-     "brier_model": 0.1613479511887255,
-     "brier_clim": 0.1837993759722222,
-     "skill_vs_clim": 0.12215180092281608,
-     "hit_rate_at_0.5": 0.8022875816993464
+     "n": 2472,
+     "n_origins": 103,
+     "brier_model": 0.16046475297734628,
+     "brier_clim": 0.18359071888754044,
+     "skill_vs_clim": 0.12596478760105578,
+     "hit_rate_at_0.5": 0.8029935275080906
     },
     {
      "target": "onset",
      "horizon_h": 3,
      "n": 2256,
      "n_origins": 94,
-     "brier_model": 0.18944450921542555,
-     "brier_clim": 0.21509841410017727,
-     "skill_vs_clim": 0.11926589506514906,
-     "hit_rate_at_0.5": 0.6968085106382979
+     "brier_model": 0.18884085333333336,
+     "brier_clim": 0.21431016869680852,
+     "skill_vs_clim": 0.11884324256917278,
+     "hit_rate_at_0.5": 0.6985815602836879
     }
    ],
    "7d": [
     {
      "target": "active",
      "horizon_h": 1,
-     "n": 19032,
-     "n_origins": 793,
-     "brier_model": 0.22109229096469105,
-     "brier_clim": 0.20093102614859187,
-     "skill_vs_clim": -0.10033923183764348,
-     "hit_rate_at_0.5": 0.7174232870954182
+     "n": 19056,
+     "n_origins": 794,
+     "brier_model": 0.22066766869437449,
+     "brier_clim": 0.20086865275083965,
+     "skill_vs_clim": -0.09856697733764275,
+     "hit_rate_at_0.5": 0.7179366078925273
     },
     {
      "target": "onset",
      "horizon_h": 3,
      "n": 18840,
      "n_origins": 785,
-     "brier_model": 0.19038281743418262,
-     "brier_clim": 0.1996924176215499,
-     "skill_vs_clim": 0.0466196979246879,
-     "hit_rate_at_0.5": 0.6920382165605096
+     "brier_model": 0.19037554772080678,
+     "brier_clim": 0.19965085175000002,
+     "skill_vs_clim": 0.046457623135049975,
+     "hit_rate_at_0.5": 0.6920912951167728
     }
    ]
   }
  },
  "calibration": {
   "n_active": 0,
-  "fitted_at": "2026-10-28T14:13:45+00:00",
+  "fitted_at": "2026-10-28T14:30:37+00:00",
   "applied_to_this_forecast": 0
  },
  "steps_s": {
-  "setup": 30.7,
-  "checkout_store": 3.9,
-  "dataset": 1.1,
-  "poll": 0.9,
-  "wait_origin": 53.0,
-  "text_collect": 13.4,
-  "forecast": 7.4,
-  "threat_type": 22.1,
-  "verify": 25.9,
-  "build_site": 136.4
+  "setup": 30.6,
+  "checkout_store": 4.2,
+  "dataset": 0.9,
+  "poll": 0.8,
+  "wait_origin": 2.1,
+  "text_collect": 16.1,
+  "forecast": 5.4,
+  "threat_type": 13.2,
+  "verify": 16.9,
+  "build_site": 98.3
  },
  "failed_steps": [],
- "elapsed_s": 297.0,
+ "elapsed_s": 190.5,
  "run": {
-  "id": "40703468927",
-  "url": "https://github.com/IvanSnezhok/air-raid-forecast-ua/actions/runs/40703468927",
-  "event": "workflow_dispatch",
-  "trigger": "pinger",
+  "id": "40706390171",
+  "url": "https://github.com/IvanSnezhok/air-raid-forecast-ua/actions/runs/40706390171",
+  "event": "schedule",
+  "trigger": "schedule",
   "hop": "0",
   "ref": "main",
   "sha": "eb76c1a7b032959e7e130a7ad5f29b97ede49152"
