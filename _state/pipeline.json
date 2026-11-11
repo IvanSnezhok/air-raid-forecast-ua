@@ -1,11 +1,11 @@
 {
- "updated_at": "2026-11-11T04:56:38+00:00",
+ "updated_at": "2026-11-11T05:13:53+00:00",
  "source": "pipeline",
- "origin": "2026-11-11T04:53Z",
- "issued_at": "2026-11-11T04:53:23Z",
- "last_poll": "2026-11-11T04:52:06Z",
+ "origin": "2026-11-11T05:11Z",
+ "issued_at": "2026-11-11T05:11:22Z",
+ "last_poll": "2026-11-11T05:10:48Z",
  "dataset_end": "2026-11-10T06:17Z",
- "record_complete_until": "2026-11-11T04:52Z",
+ "record_complete_until": "2026-11-11T05:10Z",
  "model": {
   "trained_until": "2026-11-10T06:00:00+00:00",
   "trained_at": "2026-11-10T12:58:06.672289+00:00",
@@ -18,90 +18,90 @@
   "models_source": "saved",
   "tier": "history",
   "n_raions": 119,
-  "n_active": 45,
+  "n_active": 43,
   "methods": {
    "lightgbm": 952
   }
  },
- "threat_type_origin": "2026-11-11T04:53Z",
+ "threat_type_origin": "2026-11-11T05:11Z",
  "verification": {
   "n_verified": 184944,
   "pending": 3024,
   "by_label_source": {
-   "dataset": 163152,
-   "store": 21792
+   "dataset": 162960,
+   "store": 21984
   },
   "windows": {
    "24h": [
     {
      "target": "active",
      "horizon_h": 1,
-     "n": 2736,
-     "n_origins": 114,
-     "brier_model": 0.17012662826388886,
-     "brier_clim": 0.22528884269736843,
-     "skill_vs_clim": 0.24485107106515358,
-     "hit_rate_at_0.5": 0.7785087719298246
+     "n": 2712,
+     "n_origins": 113,
+     "brier_model": 0.16955531445058997,
+     "brier_clim": 0.22547735842551625,
+     "skill_vs_clim": 0.2480162281721935,
+     "hit_rate_at_0.5": 0.7791297935103245
     },
     {
      "target": "onset",
      "horizon_h": 3,
-     "n": 2496,
-     "n_origins": 104,
-     "brier_model": 0.18668179203125002,
-     "brier_clim": 0.1914957567988782,
-     "skill_vs_clim": 0.0251387542371716,
-     "hit_rate_at_0.5": 0.6995192307692307
+     "n": 2472,
+     "n_origins": 103,
+     "brier_model": 0.1878183094538835,
+     "brier_clim": 0.1916176151537217,
+     "skill_vs_clim": 0.01982753880320587,
+     "hit_rate_at_0.5": 0.6978155339805825
     }
    ],
    "7d": [
     {
      "target": "active",
      "horizon_h": 1,
-     "n": 20904,
-     "n_origins": 871,
-     "brier_model": 0.20950648736174896,
-     "brier_clim": 0.20559738153989668,
-     "skill_vs_clim": -0.019013402761132392,
-     "hit_rate_at_0.5": 0.7280903176425565
+     "n": 20880,
+     "n_origins": 870,
+     "brier_model": 0.2093238397255747,
+     "brier_clim": 0.20541688997461685,
+     "skill_vs_clim": -0.019019612999888302,
+     "hit_rate_at_0.5": 0.7283045977011494
     },
     {
      "target": "onset",
      "horizon_h": 3,
-     "n": 20664,
-     "n_origins": 861,
-     "brier_model": 0.16581313516211768,
-     "brier_clim": 0.17317325160423924,
-     "skill_vs_clim": 0.04250146240218422,
-     "hit_rate_at_0.5": 0.7443379790940766
+     "n": 20640,
+     "n_origins": 860,
+     "brier_model": 0.16584172782848838,
+     "brier_clim": 0.17318705919282945,
+     "skill_vs_clim": 0.04241270334270564,
+     "hit_rate_at_0.5": 0.7444282945736435
     }
    ]
   }
  },
  "calibration": {
   "n_active": 3,
-  "fitted_at": "2026-11-11T04:53:48+00:00",
-  "applied_to_this_forecast": 1
+  "fitted_at": "2026-11-11T05:11:40+00:00",
+  "applied_to_this_forecast": 3
  },
  "steps_s": {
-  "setup": 29.2,
-  "checkout_store": 5.3,
-  "dataset": 1.5,
+  "setup": 26.2,
+  "checkout_store": 4.6,
+  "dataset": 1.0,
   "poll": 0.8,
-  "wait_origin": 55.3,
-  "text_collect": 13.4,
-  "forecast": 8.5,
-  "threat_type": 23.3,
-  "verify": 28.4,
-  "build_site": 142.1
+  "wait_origin": 12.9,
+  "text_collect": 12.7,
+  "forecast": 7.3,
+  "threat_type": 17.7,
+  "verify": 22.1,
+  "build_site": 110.6
  },
  "failed_steps": [],
- "elapsed_s": 310.6,
+ "elapsed_s": 218.0,
  "run": {
-  "id": "42961904699",
-  "url": "https://github.com/IvanSnezhok/air-raid-forecast-ua/actions/runs/42961904699",
-  "event": "workflow_dispatch",
-  "trigger": "pinger",
+  "id": "42963938215",
+  "url": "https://github.com/IvanSnezhok/air-raid-forecast-ua/actions/runs/42963938215",
+  "event": "schedule",
+  "trigger": "schedule",
   "hop": "0",
   "ref": "main",
   "sha": "eb76c1a7b032959e7e130a7ad5f29b97ede49152"
