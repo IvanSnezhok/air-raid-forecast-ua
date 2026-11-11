@@ -1,11 +1,11 @@
 {
- "updated_at": "2026-11-11T17:15:21+00:00",
+ "updated_at": "2026-11-11T17:26:13+00:00",
  "source": "pipeline",
- "origin": "2026-11-11T17:12Z",
- "issued_at": "2026-11-11T17:12:35Z",
- "last_poll": "2026-11-11T17:11:57Z",
+ "origin": "2026-11-11T17:23Z",
+ "issued_at": "2026-11-11T17:23:29Z",
+ "last_poll": "2026-11-11T17:22:13Z",
  "dataset_end": "2026-11-11T05:18Z",
- "record_complete_until": "2026-11-11T17:11Z",
+ "record_complete_until": "2026-11-11T17:22Z",
  "model": {
   "trained_until": "2026-11-11T05:00:00+00:00",
   "trained_at": "2026-11-11T12:08:55.777289+00:00",
@@ -18,88 +18,88 @@
   "models_source": "saved",
   "tier": "history",
   "n_raions": 119,
-  "n_active": 25,
+  "n_active": 22,
   "methods": {
    "lightgbm": 952
   }
  },
- "threat_type_origin": "2026-11-11T17:12Z",
+ "threat_type_origin": "2026-11-11T17:23Z",
  "verification": {
-  "n_verified": 187152,
-  "pending": 3504,
+  "n_verified": 187344,
+  "pending": 3312,
   "by_label_source": {
-   "dataset": 174960,
-   "store": 12192
+   "dataset": 174768,
+   "store": 12576
   },
   "windows": {
    "24h": [
     {
      "target": "active",
      "horizon_h": 1,
-     "n": 2808,
-     "n_origins": 117,
-     "brier_model": 0.1928767998219373,
-     "brier_clim": 0.21861774530270656,
-     "skill_vs_clim": 0.11774408086190502,
-     "hit_rate_at_0.5": 0.7521367521367521
+     "n": 2856,
+     "n_origins": 119,
+     "brier_model": 0.19140909567927172,
+     "brier_clim": 0.21835022804621848,
+     "skill_vs_clim": 0.12338495181806763,
+     "hit_rate_at_0.5": 0.7542016806722689
     },
     {
      "target": "onset",
      "horizon_h": 3,
-     "n": 2544,
-     "n_origins": 106,
-     "brier_model": 0.18602634840015722,
-     "brier_clim": 0.1813371116548742,
-     "skill_vs_clim": -0.025859222651608782,
-     "hit_rate_at_0.5": 0.710691823899371
+     "n": 2592,
+     "n_origins": 108,
+     "brier_model": 0.18536239850694447,
+     "brier_clim": 0.18124554549382715,
+     "skill_vs_clim": -0.022714230034732275,
+     "hit_rate_at_0.5": 0.7114197530864198
     }
    ],
    "7d": [
     {
      "target": "active",
      "horizon_h": 1,
-     "n": 21120,
-     "n_origins": 880,
-     "brier_model": 0.20914624352320077,
-     "brier_clim": 0.2021683385819129,
-     "skill_vs_clim": -0.03451532020411108,
-     "hit_rate_at_0.5": 0.7293087121212121
+     "n": 21168,
+     "n_origins": 882,
+     "brier_model": 0.20891132778580876,
+     "brier_clim": 0.20216954522581257,
+     "skill_vs_clim": -0.033347171812974974,
+     "hit_rate_at_0.5": 0.7296390778533636
     },
     {
      "target": "onset",
      "horizon_h": 3,
-     "n": 20856,
-     "n_origins": 869,
-     "brier_model": 0.16939984742999617,
-     "brier_clim": 0.17432214508630609,
-     "skill_vs_clim": 0.02823678915764205,
-     "hit_rate_at_0.5": 0.7396912159570388
+     "n": 20904,
+     "n_origins": 871,
+     "brier_model": 0.16935569865097588,
+     "brier_clim": 0.17432689914800995,
+     "skill_vs_clim": 0.028516542893436858,
+     "hit_rate_at_0.5": 0.7397148871029467
     }
    ]
   }
  },
  "calibration": {
   "n_active": 3,
-  "fitted_at": "2026-11-11T17:12:53+00:00",
+  "fitted_at": "2026-11-11T17:23:47+00:00",
   "applied_to_this_forecast": 3
  },
  "steps_s": {
-  "setup": 25.3,
-  "checkout_store": 4.2,
-  "dataset": 1.2,
-  "poll": 0.8,
-  "wait_origin": 4.0,
-  "text_collect": 26.6,
-  "forecast": 6.6,
-  "threat_type": 17.7,
-  "verify": 22.5,
-  "build_site": 125.7
+  "setup": 21.8,
+  "checkout_store": 3.1,
+  "dataset": 0.7,
+  "poll": 0.6,
+  "wait_origin": 48.3,
+  "text_collect": 20.9,
+  "forecast": 6.4,
+  "threat_type": 17.4,
+  "verify": 22.2,
+  "build_site": 123.9
  },
  "failed_steps": [],
- "elapsed_s": 236.8,
+ "elapsed_s": 266.5,
  "run": {
-  "id": "43065669190",
-  "url": "https://github.com/IvanSnezhok/air-raid-forecast-ua/actions/runs/43065669190",
+  "id": "43067326111",
+  "url": "https://github.com/IvanSnezhok/air-raid-forecast-ua/actions/runs/43067326111",
   "event": "workflow_dispatch",
   "trigger": "pinger",
   "hop": "0",
