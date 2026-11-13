@@ -1,11 +1,11 @@
 {
- "updated_at": "2026-11-13T05:46:43+00:00",
+ "updated_at": "2026-11-13T06:04:32+00:00",
  "source": "pipeline",
- "origin": "2026-11-13T05:43Z",
- "issued_at": "2026-11-13T05:43:31Z",
- "last_poll": "2026-11-13T05:42:04Z",
- "dataset_end": "2026-11-12T06:14Z",
- "record_complete_until": "2026-11-13T05:42Z",
+ "origin": "2026-11-13T06:02Z",
+ "issued_at": "2026-11-13T06:02:19Z",
+ "last_poll": "2026-11-13T06:01:48Z",
+ "dataset_end": "2026-11-13T05:20Z",
+ "record_complete_until": "2026-11-13T05:20Z",
  "model": {
   "trained_until": "2026-11-12T06:00:00+00:00",
   "trained_at": "2026-11-12T13:13:19.234337+00:00",
@@ -18,88 +18,87 @@
   "models_source": "saved",
   "tier": "history",
   "n_raions": 119,
-  "n_active": 19,
+  "n_active": 11,
   "methods": {
    "lightgbm": 952
   }
  },
- "threat_type_origin": "2026-11-13T05:43Z",
+ "threat_type_origin": "2026-11-13T06:02Z",
  "verification": {
-  "n_verified": 188928,
-  "pending": 3072,
+  "n_verified": 187680,
+  "pending": 4128,
   "by_label_source": {
-   "dataset": 166128,
-   "store": 22800
+   "dataset": 187680
   },
   "windows": {
    "24h": [
     {
      "target": "active",
      "horizon_h": 1,
-     "n": 2760,
-     "n_origins": 115,
-     "brier_model": 0.1642269107862319,
-     "brier_clim": 0.21755964772463765,
-     "skill_vs_clim": 0.24514075793093903,
-     "hit_rate_at_0.5": 0.7829710144927536
+     "n": 2616,
+     "n_origins": 109,
+     "brier_model": 0.1885397103975535,
+     "brier_clim": 0.18305042791666667,
+     "skill_vs_clim": -0.0299878156165021,
+     "hit_rate_at_0.5": 0.7614678899082569
     },
     {
      "target": "onset",
      "horizon_h": 3,
-     "n": 2496,
-     "n_origins": 104,
-     "brier_model": 0.1592328556650641,
-     "brier_clim": 0.17464300422275642,
-     "skill_vs_clim": 0.08823799513913966,
-     "hit_rate_at_0.5": 0.7644230769230769
+     "n": 2328,
+     "n_origins": 97,
+     "brier_model": 0.13983732599226806,
+     "brier_clim": 0.14446198789518902,
+     "skill_vs_clim": 0.03201300196890744,
+     "hit_rate_at_0.5": 0.779639175257732
     }
    ],
    "7d": [
     {
      "target": "active",
      "horizon_h": 1,
-     "n": 20832,
-     "n_origins": 868,
-     "brier_model": 0.210128825483871,
-     "brier_clim": 0.20420368273761522,
-     "skill_vs_clim": -0.029015846662614253,
-     "hit_rate_at_0.5": 0.7249903993855606
+     "n": 20688,
+     "n_origins": 862,
+     "brier_model": 0.21400098824390953,
+     "brier_clim": 0.2001963822708817,
+     "skill_vs_clim": -0.06895532185166608,
+     "hit_rate_at_0.5": 0.7209010054137664
     },
     {
      "target": "onset",
      "horizon_h": 3,
-     "n": 20568,
-     "n_origins": 857,
-     "brier_model": 0.16567326846217423,
-     "brier_clim": 0.16986277569476857,
-     "skill_vs_clim": 0.02466406907257057,
-     "hit_rate_at_0.5": 0.7482983274990276
+     "n": 20400,
+     "n_origins": 850,
+     "brier_model": 0.16408315255,
+     "brier_clim": 0.16652896128284314,
+     "skill_vs_clim": 0.014686987260366213,
+     "hit_rate_at_0.5": 0.7495588235294117
     }
    ]
   }
  },
  "calibration": {
-  "n_active": 6,
-  "fitted_at": "2026-11-13T05:43:55+00:00",
+  "n_active": 3,
+  "fitted_at": "2026-11-13T06:02:33+00:00",
   "applied_to_this_forecast": 6
  },
  "steps_s": {
-  "setup": 30.6,
-  "checkout_store": 4.3,
-  "dataset": 1.0,
-  "poll": 0.8,
-  "wait_origin": 56.7,
-  "text_collect": 20.9,
-  "forecast": 8.7,
-  "threat_type": 23.1,
-  "verify": 28.1,
-  "build_site": 139.6
+  "setup": 20.0,
+  "checkout_store": 3.7,
+  "dataset": 0.9,
+  "poll": 0.7,
+  "wait_origin": 12.9,
+  "text_collect": 12.2,
+  "forecast": 5.3,
+  "threat_type": 13.7,
+  "verify": 17.7,
+  "build_site": 100.8
  },
  "failed_steps": [],
- "elapsed_s": 316.2,
+ "elapsed_s": 189.3,
  "run": {
-  "id": "43373633488",
-  "url": "https://github.com/IvanSnezhok/air-raid-forecast-ua/actions/runs/43373633488",
+  "id": "43375793650",
+  "url": "https://github.com/IvanSnezhok/air-raid-forecast-ua/actions/runs/43375793650",
   "event": "workflow_dispatch",
   "trigger": "pinger",
   "hop": "0",
