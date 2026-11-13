@@ -1,11 +1,11 @@
 {
- "updated_at": "2026-11-13T20:14:46+00:00",
+ "updated_at": "2026-11-13T20:27:02+00:00",
  "source": "pipeline",
- "origin": "2026-11-13T20:12Z",
- "issued_at": "2026-11-13T20:12:24Z",
- "last_poll": "2026-11-13T20:11:54Z",
+ "origin": "2026-11-13T20:23Z",
+ "issued_at": "2026-11-13T20:23:26Z",
+ "last_poll": "2026-11-13T20:22:03Z",
  "dataset_end": "2026-11-13T05:20Z",
- "record_complete_until": "2026-11-13T20:11Z",
+ "record_complete_until": "2026-11-13T20:22Z",
  "model": {
   "trained_until": "2026-11-13T05:00:00+00:00",
   "trained_at": "2026-11-13T12:36:23.057061+00:00",
@@ -18,40 +18,40 @@
   "models_source": "saved",
   "tier": "history",
   "n_raions": 119,
-  "n_active": 26,
+  "n_active": 29,
   "methods": {
    "lightgbm": 952
   }
  },
- "threat_type_origin": "2026-11-13T20:12Z",
+ "threat_type_origin": "2026-11-13T20:23Z",
  "verification": {
-  "n_verified": 189216,
-  "pending": 2976,
+  "n_verified": 189264,
+  "pending": 2928,
   "by_label_source": {
-   "dataset": 173472,
-   "store": 15744
+   "dataset": 173280,
+   "store": 15984
   },
   "windows": {
    "24h": [
     {
      "target": "active",
      "horizon_h": 1,
-     "n": 2856,
-     "n_origins": 119,
-     "brier_model": 0.15806128465686275,
-     "brier_clim": 0.19745412531162468,
-     "skill_vs_clim": 0.19950376115257973,
-     "hit_rate_at_0.5": 0.792016806722689
+     "n": 2880,
+     "n_origins": 120,
+     "brier_model": 0.15774465743055555,
+     "brier_clim": 0.19743402114236114,
+     "skill_vs_clim": 0.20102596037988463,
+     "hit_rate_at_0.5": 0.7920138888888889
     },
     {
      "target": "onset",
      "horizon_h": 3,
-     "n": 2616,
-     "n_origins": 109,
-     "brier_model": 0.13350359039373086,
-     "brier_clim": 0.16715909430428133,
-     "skill_vs_clim": 0.2013381566263277,
-     "hit_rate_at_0.5": 0.7855504587155964
+     "n": 2640,
+     "n_origins": 110,
+     "brier_model": 0.13376282250000002,
+     "brier_clim": 0.1675323778219697,
+     "skill_vs_clim": 0.20157032187446955,
+     "hit_rate_at_0.5": 0.7852272727272728
     }
    ],
    "7d": [
@@ -60,46 +60,46 @@
      "horizon_h": 1,
      "n": 20784,
      "n_origins": 866,
-     "brier_model": 0.20687199914886453,
-     "brier_clim": 0.20074067956360664,
-     "skill_vs_clim": -0.03054348325704015,
-     "hit_rate_at_0.5": 0.7299846035411856
+     "brier_model": 0.2067443765122209,
+     "brier_clim": 0.20069016724836414,
+     "skill_vs_clim": -0.03016694513171836,
+     "hit_rate_at_0.5": 0.7301289453425712
     },
     {
      "target": "onset",
      "horizon_h": 3,
      "n": 20544,
      "n_origins": 856,
-     "brier_model": 0.162343048774338,
-     "brier_clim": 0.16771922126508956,
-     "skill_vs_clim": 0.03205459964695534,
-     "hit_rate_at_0.5": 0.7496105919003115
+     "brier_model": 0.16232998077200156,
+     "brier_clim": 0.16776813047507788,
+     "skill_vs_clim": 0.0324146766592488,
+     "hit_rate_at_0.5": 0.7496592679127726
     }
    ]
   }
  },
  "calibration": {
   "n_active": 3,
-  "fitted_at": "2026-11-13T20:12:37+00:00",
-  "applied_to_this_forecast": 4
+  "fitted_at": "2026-11-13T20:23:48+00:00",
+  "applied_to_this_forecast": 3
  },
  "steps_s": {
-  "setup": 20.1,
+  "setup": 23.3,
   "checkout_store": 3.6,
-  "dataset": 0.5,
-  "poll": 1.1,
-  "wait_origin": 7.0,
-  "text_collect": 16.8,
-  "forecast": 5.2,
-  "threat_type": 12.6,
-  "verify": 17.5,
-  "build_site": 111.2
+  "dataset": 0.9,
+  "poll": 1.0,
+  "wait_origin": 58.4,
+  "text_collect": 16.3,
+  "forecast": 8.3,
+  "threat_type": 21.1,
+  "verify": 29.3,
+  "build_site": 164.2
  },
  "failed_steps": [],
- "elapsed_s": 197.0,
+ "elapsed_s": 328.1,
  "run": {
-  "id": "43499190523",
-  "url": "https://github.com/IvanSnezhok/air-raid-forecast-ua/actions/runs/43499190523",
+  "id": "43500765480",
+  "url": "https://github.com/IvanSnezhok/air-raid-forecast-ua/actions/runs/43500765480",
   "event": "workflow_dispatch",
   "trigger": "pinger",
   "hop": "0",
