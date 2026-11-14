@@ -1,14 +1,14 @@
 {
- "updated_at": "2026-11-14T05:45:41+00:00",
+ "updated_at": "2026-11-14T05:56:25+00:00",
  "source": "pipeline",
- "origin": "2026-11-14T05:42Z",
- "issued_at": "2026-11-14T05:42:23Z",
- "last_poll": "2026-11-14T05:41:59Z",
+ "origin": "2026-11-14T05:52Z",
+ "issued_at": "2026-11-14T05:52:27Z",
+ "last_poll": "2026-11-14T05:52:00Z",
  "dataset_end": "2026-11-14T05:07Z",
  "record_complete_until": "2026-11-14T05:07Z",
  "model": {
-  "trained_until": "2026-11-13T05:00:00+00:00",
-  "trained_at": "2026-11-13T12:36:23.057061+00:00",
+  "trained_until": "2026-11-14T05:00:00+00:00",
+  "trained_at": "2026-11-14T05:48:42.085104+00:00",
   "holdout": true,
   "code_version": "96bc342478d9",
   "served": "lightgbm,lightgbm_text",
@@ -18,87 +18,87 @@
   "models_source": "saved",
   "tier": "history",
   "n_raions": 119,
-  "n_active": 23,
+  "n_active": 24,
   "methods": {
    "lightgbm": 952
   }
  },
- "threat_type_origin": "2026-11-14T05:42Z",
+ "threat_type_origin": "2026-11-14T05:52Z",
  "verification": {
-  "n_verified": 187296,
-  "pending": 3936,
+  "n_verified": 187104,
+  "pending": 4128,
   "by_label_source": {
-   "dataset": 187296
+   "dataset": 187104
   },
   "windows": {
    "24h": [
     {
      "target": "active",
      "horizon_h": 1,
-     "n": 2760,
-     "n_origins": 115,
-     "brier_model": 0.17576268733333333,
-     "brier_clim": 0.18676088774637678,
-     "skill_vs_clim": 0.05888920611674919,
-     "hit_rate_at_0.5": 0.7666666666666667
+     "n": 2736,
+     "n_origins": 114,
+     "brier_model": 0.17596435340277777,
+     "brier_clim": 0.1868019703874269,
+     "skill_vs_clim": 0.0580166095795025,
+     "hit_rate_at_0.5": 0.7664473684210527
     },
     {
      "target": "onset",
      "horizon_h": 3,
-     "n": 2496,
-     "n_origins": 104,
-     "brier_model": 0.1436385316866987,
-     "brier_clim": 0.15705987206730768,
-     "skill_vs_clim": 0.08545365664666582,
-     "hit_rate_at_0.5": 0.7936698717948718
+     "n": 2472,
+     "n_origins": 103,
+     "brier_model": 0.14356568835355987,
+     "brier_clim": 0.15699808378236246,
+     "skill_vs_clim": 0.0855577030317336,
+     "hit_rate_at_0.5": 0.794093851132686
     }
    ],
    "7d": [
     {
      "target": "active",
      "horizon_h": 1,
-     "n": 20616,
-     "n_origins": 859,
-     "brier_model": 0.209461229975747,
-     "brier_clim": 0.19943461390376407,
-     "skill_vs_clim": -0.050275204869006496,
-     "hit_rate_at_0.5": 0.7277357392316647
+     "n": 20592,
+     "n_origins": 858,
+     "brier_model": 0.20958956904234655,
+     "brier_clim": 0.1994632634833916,
+     "skill_vs_clim": -0.05076777238129426,
+     "hit_rate_at_0.5": 0.7275641025641025
     },
     {
      "target": "onset",
      "horizon_h": 3,
-     "n": 20352,
-     "n_origins": 848,
-     "brier_model": 0.16440336716244103,
-     "brier_clim": 0.16809276678262577,
-     "skill_vs_clim": 0.021948592380276577,
-     "hit_rate_at_0.5": 0.7472975628930818
+     "n": 20328,
+     "n_origins": 847,
+     "brier_model": 0.16439844769578907,
+     "brier_clim": 0.1681033558190673,
+     "skill_vs_clim": 0.02203946557298886,
+     "hit_rate_at_0.5": 0.7472943722943723
     }
    ]
   }
  },
  "calibration": {
   "n_active": 1,
-  "fitted_at": "2026-11-14T05:42:44+00:00",
-  "applied_to_this_forecast": 2
+  "fitted_at": "2026-11-14T05:52:50+00:00",
+  "applied_to_this_forecast": 1
  },
  "steps_s": {
-  "setup": 25.3,
-  "checkout_store": 3.8,
-  "dataset": 0.7,
+  "setup": 27.6,
+  "checkout_store": 4.5,
+  "dataset": 1.0,
   "poll": 0.9,
   "wait_origin": 1.6,
-  "text_collect": 13.8,
-  "forecast": 7.9,
-  "threat_type": 20.0,
-  "verify": 27.0,
-  "build_site": 149.7
+  "text_collect": 16.1,
+  "forecast": 9.5,
+  "threat_type": 22.2,
+  "verify": 32.4,
+  "build_site": 182.5
  },
  "failed_steps": [],
- "elapsed_s": 252.1,
+ "elapsed_s": 300.5,
  "run": {
-  "id": "43562722127",
-  "url": "https://github.com/IvanSnezhok/air-raid-forecast-ua/actions/runs/43562722127",
+  "id": "43563504951",
+  "url": "https://github.com/IvanSnezhok/air-raid-forecast-ua/actions/runs/43563504951",
   "event": "workflow_dispatch",
   "trigger": "pinger",
   "hop": "0",
