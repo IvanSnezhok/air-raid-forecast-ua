@@ -1,11 +1,11 @@
 {
- "updated_at": "2026-11-22T11:36:42+00:00",
+ "updated_at": "2026-11-22T11:47:51+00:00",
  "source": "pipeline",
- "origin": "2026-11-22T11:33Z",
- "issued_at": "2026-11-22T11:33:23Z",
- "last_poll": "2026-11-22T11:32:06Z",
+ "origin": "2026-11-22T11:44Z",
+ "issued_at": "2026-11-22T11:44:22Z",
+ "last_poll": "2026-11-22T11:43:40Z",
  "dataset_end": "2026-11-22T05:22Z",
- "record_complete_until": "2026-11-22T11:32Z",
+ "record_complete_until": "2026-11-22T11:43Z",
  "model": {
   "trained_until": "2026-11-22T05:00:00+00:00",
   "trained_at": "2026-11-22T06:08:44.517767+00:00",
@@ -18,90 +18,90 @@
   "models_source": "saved",
   "tier": "history",
   "n_raions": 119,
-  "n_active": 46,
+  "n_active": 38,
   "methods": {
    "lightgbm": 952
   }
  },
- "threat_type_origin": "2026-11-22T11:33Z",
+ "threat_type_origin": "2026-11-22T11:44Z",
  "verification": {
   "n_verified": 186000,
   "pending": 2928,
   "by_label_source": {
-   "dataset": 179232,
-   "store": 6768
+   "dataset": 179040,
+   "store": 6960
   },
   "windows": {
    "24h": [
     {
      "target": "active",
      "horizon_h": 1,
-     "n": 2808,
-     "n_origins": 117,
-     "brier_model": 0.1509917548611111,
-     "brier_clim": 0.17213029910612535,
-     "skill_vs_clim": 0.1228054813986088,
-     "hit_rate_at_0.5": 0.8123219373219374
+     "n": 2784,
+     "n_origins": 116,
+     "brier_model": 0.14981371491020115,
+     "brier_clim": 0.171816825470546,
+     "skill_vs_clim": 0.12806144276083586,
+     "hit_rate_at_0.5": 0.8135775862068966
     },
     {
      "target": "onset",
      "horizon_h": 3,
-     "n": 2592,
-     "n_origins": 108,
-     "brier_model": 0.1511747388155864,
-     "brier_clim": 0.1689714966396605,
-     "skill_vs_clim": 0.10532402315182476,
-     "hit_rate_at_0.5": 0.7743055555555556
+     "n": 2568,
+     "n_origins": 107,
+     "brier_model": 0.15062245714174452,
+     "brier_clim": 0.16858871228971964,
+     "skill_vs_clim": 0.10656855316090275,
+     "hit_rate_at_0.5": 0.7760903426791277
     }
    ],
    "7d": [
     {
      "target": "active",
      "horizon_h": 1,
-     "n": 20472,
-     "n_origins": 853,
-     "brier_model": 0.20470187578350918,
-     "brier_clim": 0.19822807998729974,
-     "skill_vs_clim": -0.03265831862279156,
-     "hit_rate_at_0.5": 0.738032434544744
+     "n": 20448,
+     "n_origins": 852,
+     "brier_model": 0.20462492482541078,
+     "brier_clim": 0.19814172736844682,
+     "skill_vs_clim": -0.03272000069378822,
+     "hit_rate_at_0.5": 0.7380672926447575
     },
     {
      "target": "onset",
      "horizon_h": 3,
-     "n": 20256,
-     "n_origins": 844,
-     "brier_model": 0.17781711023054894,
-     "brier_clim": 0.18247994178169433,
-     "skill_vs_clim": 0.025552570357150084,
-     "hit_rate_at_0.5": 0.7240817535545023
+     "n": 20232,
+     "n_origins": 843,
+     "brier_model": 0.17753331543198894,
+     "brier_clim": 0.1823173311378015,
+     "skill_vs_clim": 0.02624004901759247,
+     "hit_rate_at_0.5": 0.7245452748121787
     }
    ]
   }
  },
  "calibration": {
   "n_active": 0,
-  "fitted_at": "2026-11-22T11:33:47+00:00",
+  "fitted_at": "2026-11-22T11:44:46+00:00",
   "applied_to_this_forecast": 0
  },
  "steps_s": {
-  "setup": 26.6,
-  "checkout_store": 5.0,
-  "dataset": 0.8,
-  "poll": 0.9,
-  "wait_origin": 55.3,
-  "text_collect": 12.8,
-  "forecast": 8.8,
+  "setup": 28.0,
+  "checkout_store": 4.2,
+  "dataset": 1.2,
+  "poll": 0.8,
+  "wait_origin": 21.0,
+  "text_collect": 11.6,
+  "forecast": 9.1,
   "threat_type": 23.3,
-  "verify": 28.0,
-  "build_site": 146.8
+  "verify": 28.2,
+  "build_site": 156.0
  },
  "failed_steps": [],
- "elapsed_s": 310.5,
+ "elapsed_s": 285.0,
  "run": {
-  "id": "45017723495",
-  "url": "https://github.com/IvanSnezhok/air-raid-forecast-ua/actions/runs/45017723495",
-  "event": "workflow_dispatch",
-  "trigger": "pinger",
+  "id": "45018666488",
+  "url": "https://github.com/IvanSnezhok/air-raid-forecast-ua/actions/runs/45018666488",
+  "event": "schedule",
+  "trigger": "schedule",
   "hop": "0",
   "ref": "main",
   "sha": "eb76c1a7b032959e7e130a7ad5f29b97ede49152"
